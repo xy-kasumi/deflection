@@ -2,14 +2,8 @@ import * as THREE from 'three';
 import type { BeamState } from './state';
 import type { Deflection, CrossSection } from './physics';
 
-export type ViewPreset = 'front' | 'side' | 'top' | 'iso';
-
-const PRESETS: Record<ViewPreset, { yawDeg: number; pitchDeg: number }> = {
-  front: { yawDeg:  0, pitchDeg:   0 },
-  side:  { yawDeg: 90, pitchDeg:   0 },
-  top:   { yawDeg:  0, pitchDeg: -90 },
-  iso:   { yawDeg: 45, pitchDeg: -30 },
-};
+const ISO_YAW_DEG = 45;
+const ISO_PITCH_DEG = -30;
 
 const COLOR_BG = 0xffffff;
 const COLOR_BEAM = 0x3b6db5;
@@ -22,6 +16,13 @@ const SECTION_FRACTION_ALONG_BEAM = 0.2;
 
 const deg = (d: number) => (d * Math.PI) / 180;
 
+// Drag tuning: time-constant of the input low-pass (smoothing) and of the
+// post-release rotational decay. Larger constants = less lag / faster stop.
+const SMOOTH_K = 18;   // ~55 ms lag during drag
+const DECAY_K = 16;    // ~60 ms inertia time constant
+const STOP_VEL = 0.1;  // rad/s — threshold to end the animation loop
+const YAW_PER_PX = 1 / 150;
+
 export class Scene {
   private renderer: THREE.WebGLRenderer;
   private root: THREE.Scene;
@@ -31,6 +32,12 @@ export class Scene {
   private currentL: number;
   private yaw: number;
   private pitch: number;
+  private targetYaw: number;
+  private yawVelocity = 0;
+  private dragging = false;
+  private lastPointerX = 0;
+  private lastFrameTime = 0;
+  private animHandle = 0;
 
   constructor(canvas: HTMLCanvasElement, initialL: number) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -43,22 +50,74 @@ export class Scene {
     this.root.add(this.content);
     this.root.add(this.axes);
     this.currentL = initialL;
-    this.yaw = deg(PRESETS.iso.yawDeg);
-    this.pitch = deg(PRESETS.iso.pitchDeg);
+    this.yaw = deg(ISO_YAW_DEG);
+    this.pitch = deg(ISO_PITCH_DEG);
+    this.targetYaw = this.yaw;
 
     const ro = new ResizeObserver(() => this.onResize());
     ro.observe(canvas);
+
+    this.installDrag(canvas);
   }
 
-  setView(p: ViewPreset) {
-    this.yaw = deg(PRESETS[p].yawDeg);
-    this.pitch = deg(PRESETS[p].pitchDeg);
-    this.refresh();
+  private installDrag(canvas: HTMLCanvasElement) {
+    canvas.addEventListener('pointerdown', (e) => {
+      this.dragging = true;
+      this.lastPointerX = e.clientX;
+      this.yawVelocity = 0;
+      this.targetYaw = this.yaw;
+      canvas.setPointerCapture(e.pointerId);
+      canvas.classList.add('dragging');
+      this.startAnim();
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!this.dragging) return;
+      const dx = e.clientX - this.lastPointerX;
+      this.lastPointerX = e.clientX;
+      this.targetYaw -= dx * YAW_PER_PX;
+    });
+
+    const end = () => {
+      if (!this.dragging) return;
+      this.dragging = false;
+      canvas.classList.remove('dragging');
+    };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
   }
 
-  nudgeYawDeg(d: number) {
-    this.yaw += deg(d);
-    this.refresh();
+  private startAnim() {
+    if (this.animHandle) return;
+    this.lastFrameTime = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - this.lastFrameTime) / 1000);
+      this.lastFrameTime = now;
+
+      if (this.dragging) {
+        const prevYaw = this.yaw;
+        const alpha = 1 - Math.exp(-dt * SMOOTH_K);
+        this.yaw += (this.targetYaw - this.yaw) * alpha;
+        this.yawVelocity = (this.yaw - prevYaw) / Math.max(dt, 1e-3);
+      } else {
+        this.yaw += this.yawVelocity * dt;
+        this.targetYaw = this.yaw;
+        this.yawVelocity *= Math.exp(-dt * DECAY_K);
+        if (Math.abs(this.yawVelocity) < STOP_VEL) this.yawVelocity = 0;
+      }
+
+      this.refresh();
+
+      const settled = !this.dragging
+        && this.yawVelocity === 0
+        && Math.abs(this.targetYaw - this.yaw) < 1e-4;
+      if (settled) {
+        this.animHandle = 0;
+        return;
+      }
+      this.animHandle = requestAnimationFrame(tick);
+    };
+    this.animHandle = requestAnimationFrame(tick);
   }
 
   update(s: BeamState, defl: Deflection, displayScale: number, section: CrossSection) {

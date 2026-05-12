@@ -18,16 +18,26 @@ export function computeDeflection(s: BeamState): Deflection {
   return { ax_mm: ax, ay_mm: ay, peak_mm: Math.max(ax, ay) };
 }
 
-export type DisplayScale = 1 | 10 | 100;
-export const SCALES: DisplayScale[] = [1, 10, 100];
+export type DisplayScale = 1 | 10 | 100 | 1000;
+export const SCALES: DisplayScale[] = [1, 10, 100, 1000];
 
-export function autoDisplayScale(peakMm: number, L_mm: number): DisplayScale {
-  if (!(peakMm > 0) || !(L_mm > 0)) return 1;
-  const ideal = (0.1 * L_mm) / peakMm;
-  const power = Math.round(Math.log10(ideal));
-  if (power <= 0) return 1;
-  if (power === 1) return 10;
-  return 100;
+// Visibility floor: keep the current scale unless the rendered ellipse would be
+// too small to read, in which case bump up to the smallest scale that clears
+// the floor. One-way ratchet: never downshifts automatically.
+const VISIBLE_FRAC_OF_L = 0.05;
+
+export function ensureVisibleScale(
+  current: DisplayScale,
+  peak_mm: number,
+  L_mm: number,
+): DisplayScale {
+  if (!(peak_mm > 0) || !(L_mm > 0)) return current;
+  const floor = VISIBLE_FRAC_OF_L * L_mm;
+  if (peak_mm * current >= floor) return current;
+  for (const s of SCALES) {
+    if (peak_mm * s >= floor) return s;
+  }
+  return SCALES[SCALES.length - 1] as DisplayScale;
 }
 
 // "Fake" cross-section for visual sanity-check on (Ix, Iy, J). Two topologies

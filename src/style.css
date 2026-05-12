@@ -125,38 +125,13 @@ html, body {
   min-width: 0;
 }
 
-#view-buttons {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px;
-  background: #ffffff;
-  border-bottom: 1px solid #d8dce2;
-}
-
-#view-buttons .spacer { flex: 1; }
-
-#view-buttons button {
-  background: #ffffff;
-  color: #1f2328;
-  border: 1px solid #d0d7de;
-  padding: 6px 12px;
-  font: inherit;
-  font-size: 13px;
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-#view-buttons button:hover {
-  background: #f3f4f6;
-  border-color: #afb8c1;
-}
-
-#view-buttons button:active { background: #eaeef2; }
-
 #canvas {
   flex: 1;
   display: block;
   width: 100%;
   height: 100%;
+  cursor: grab;
+  touch-action: none;
 }
+
+#canvas.dragging { cursor: grabbing; }

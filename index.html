@@ -50,25 +50,15 @@
         </form>
         <div id="readout">
           <div class="line"><span class="lbl">δ peak</span><span class="val" id="readout-delta">—</span></div>
-          <div class="line"><span class="lbl">scale</span><span class="val" id="readout-scale">—</span></div>
           <div id="scale-buttons">
-            <button type="button" data-scale="auto">Auto</button>
             <button type="button" data-scale="1">×1</button>
             <button type="button" data-scale="10">×10</button>
             <button type="button" data-scale="100">×100</button>
+            <button type="button" data-scale="1000">×1000</button>
           </div>
         </div>
       </aside>
       <main id="canvas-panel">
-        <div id="view-buttons">
-          <button type="button" data-view="front">Front</button>
-          <button type="button" data-view="side">Side</button>
-          <button type="button" data-view="top">Top</button>
-          <button type="button" data-view="iso">Iso</button>
-          <span class="spacer"></span>
-          <button type="button" data-yaw="-15">−15°</button>
-          <button type="button" data-yaw="15">+15°</button>
-        </div>
         <canvas id="canvas"></canvas>
       </main>
     </div>

@@ -1,42 +1,57 @@
-import { Scene, ViewPreset } from './scene';
+import { Scene } from './scene';
 import { bindForm } from './ui';
 import {
   computeDeflection,
-  autoDisplayScale,
+  ensureVisibleScale,
   computeCrossSection,
   type DisplayScale,
 } from './physics';
 import { defaultState, BeamState, MATERIALS } from './state';
 
-type ScaleMode = 'auto' | DisplayScale;
-
 const state: BeamState = defaultState();
-let scaleMode: ScaleMode = 'auto';
+let scale: DisplayScale = 1;
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const scene = new Scene(canvas, state.L_mm);
 
 const deltaEl = document.getElementById('readout-delta') as HTMLElement;
-const scaleEl = document.getElementById('readout-scale') as HTMLElement;
 const matInfoEl = document.getElementById('material-info') as HTMLElement;
 const form = document.getElementById('beam-form') as HTMLFormElement;
 
-function recompute() {
+function render() {
   const defl = computeDeflection(state);
-  const scale: DisplayScale =
-    scaleMode === 'auto'
-      ? autoDisplayScale(defl.peak_mm, state.L_mm)
-      : scaleMode;
   const section = computeCrossSection(state.Ix_mm4, state.Iy_mm4, state.J_mm4);
-
   scene.update(state, defl, scale, section);
   deltaEl.textContent = `${fmt2sf(defl.peak_mm)} mm`;
-  scaleEl.textContent =
-    scaleMode === 'auto' ? `auto (×${scale})` : `×${scale}`;
-
   const m = MATERIALS[state.material];
   matInfoEl.textContent =
     `E = ${fmtModulusGPa(m.E_MPa)} GPa,  G = ${fmtModulusGPa(m.G_MPa)} GPa`;
+}
+
+function onInputChange() {
+  // Only bump *up* if the current scale would render an invisible ellipse.
+  // Manual clicks bypass this path so they always stick.
+  const defl = computeDeflection(state);
+  const bumped = ensureVisibleScale(scale, defl.peak_mm, state.L_mm);
+  if (bumped !== scale) {
+    scale = bumped;
+    refreshScaleButtons();
+  }
+  render();
+}
+
+function onScaleClick(s: DisplayScale) {
+  scale = s;
+  refreshScaleButtons();
+  render();
+}
+
+function refreshScaleButtons() {
+  for (const btn of document.querySelectorAll<HTMLButtonElement>(
+    '#scale-buttons button[data-scale]',
+  )) {
+    btn.classList.toggle('active', btn.dataset.scale === String(scale));
+  }
 }
 
 function fmt2sf(x: number): string {
@@ -58,41 +73,18 @@ function fmtModulusGPa(mpa: number): string {
   return gpa >= 10 ? gpa.toFixed(0) : gpa.toFixed(1);
 }
 
-function setScaleMode(mode: ScaleMode) {
-  scaleMode = mode;
-  for (const btn of document.querySelectorAll<HTMLButtonElement>(
-    '#scale-buttons button[data-scale]',
-  )) {
-    btn.classList.toggle('active', btn.dataset.scale === String(mode));
-  }
-  recompute();
-}
+bindForm(form, state, onInputChange);
 
-bindForm(form, state, recompute);
-
-for (const btn of document.querySelectorAll<HTMLButtonElement>(
-  '#view-buttons button[data-view]',
-)) {
-  btn.addEventListener('click', () => {
-    scene.setView(btn.dataset.view as ViewPreset);
-  });
-}
-for (const btn of document.querySelectorAll<HTMLButtonElement>(
-  '#view-buttons button[data-yaw]',
-)) {
-  const delta = Number(btn.dataset.yaw);
-  btn.addEventListener('click', () => scene.nudgeYawDeg(delta));
-}
 for (const btn of document.querySelectorAll<HTMLButtonElement>(
   '#scale-buttons button[data-scale]',
 )) {
   btn.addEventListener('click', () => {
     const v = btn.dataset.scale;
-    if (v === 'auto') setScaleMode('auto');
-    else if (v === '1' || v === '10' || v === '100') {
-      setScaleMode(Number(v) as DisplayScale);
+    if (v === '1' || v === '10' || v === '100' || v === '1000') {
+      onScaleClick(Number(v) as DisplayScale);
     }
   });
 }
 
-setScaleMode('auto');
+refreshScaleButtons();
+onInputChange();
