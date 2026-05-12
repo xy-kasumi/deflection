@@ -207,7 +207,7 @@ export class Scene {
       horiz.position.x = xSec;
       vert.position.x = xSec;
       this.content.add(horiz, vert);
-    } else {
+    } else if (section.type === 'hollowBox') {
       const { W_mm, H_mm, t_mm } = section;
       const top = new THREE.Mesh(new THREE.BoxGeometry(eps, W_mm, t_mm), mat);
       top.position.set(xSec, 0, H_mm / 2 - t_mm / 2);
@@ -219,6 +219,11 @@ export class Scene {
       const right = new THREE.Mesh(new THREE.BoxGeometry(eps, t_mm, inner), mat);
       right.position.set(xSec, W_mm / 2 - t_mm / 2, 0);
       this.content.add(top, bot, left, right);
+    } else {
+      const { b_mm, h_mm } = section;
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(eps, b_mm, h_mm), mat);
+      mesh.position.x = xSec;
+      this.content.add(mesh);
     }
   }
 

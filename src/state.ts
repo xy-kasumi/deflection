@@ -38,12 +38,12 @@ export interface BeamState {
 
 export function defaultState(): BeamState {
   return {
-    Ix_mm4: 1000,
-    Iy_mm4: 1000,
-    J_mm4: 800,
-    L_mm: 300,
-    material: 'STEEL',
-    force_kgf: 1,
+    Ix_mm4: 50,
+    Iy_mm4: 300,
+    J_mm4: 150,
+    L_mm: 100,
+    material: 'PLA',
+    force_kgf: 0.5,
     beamType: 'cantilever',
   };
 }

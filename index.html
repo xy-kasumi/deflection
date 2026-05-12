@@ -14,9 +14,9 @@
           <label>
             <span>Material</span>
             <select name="material">
-              <option value="PLA">Printed PLA</option>
+              <option value="PLA" selected>Printed PLA</option>
               <option value="AL">Aluminum</option>
-              <option value="STEEL" selected>Steel</option>
+              <option value="STEEL">Steel</option>
             </select>
             <small class="material-info" id="material-info"></small>
           </label>
@@ -29,23 +29,23 @@
           </label>
           <label>
             <span>Length L (mm)</span>
-            <input type="number" name="L_mm" step="any" value="300" />
+            <input type="number" name="L_mm" step="any" value="100" />
           </label>
           <label>
             <span>I<sub>x</sub> (mm⁴)</span>
-            <input type="number" name="Ix_mm4" step="any" value="1000" />
+            <input type="number" name="Ix_mm4" step="any" value="50" />
           </label>
           <label>
             <span>I<sub>y</sub> (mm⁴)</span>
-            <input type="number" name="Iy_mm4" step="any" value="1000" />
+            <input type="number" name="Iy_mm4" step="any" value="300" />
           </label>
           <label>
             <span>J — torsion (mm⁴)</span>
-            <input type="number" name="J_mm4" step="any" value="800" />
+            <input type="number" name="J_mm4" step="any" value="150" />
           </label>
           <label>
             <span>Force (kgf)</span>
-            <input type="number" name="force_kgf" step="any" value="1" />
+            <input type="number" name="force_kgf" step="any" value="0.5" />
           </label>
         </form>
         <div id="readout">

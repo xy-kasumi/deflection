@@ -40,13 +40,19 @@ export function ensureVisibleScale(
   return SCALES[SCALES.length - 1] as DisplayScale;
 }
 
-// "Fake" cross-section for visual sanity-check on (Ix, Iy, J). Two topologies
-// cover open- and closed-section regimes; we pick whichever fits better. The
-// shape is a sketch, not a claim: composite or anisotropic real-world parts can
-// have (Ix, Iy, J) combinations that no isotropic shape reproduces.
+// "Fake" cross-section for visual sanity-check on (Ix, Iy, J). Three topologies
+// cover the three regimes by J/I magnitude:
+//   cruciform   — open thin-walled        (J/I small)
+//   hollowBox   — closed thin-walled      (J/I medium)
+//   filledRect  — solid rectangle         (J/I large; matches Ix & Iy, J floats)
+// We don't pretend the shape is "the" cross-section: composite or anisotropic
+// real parts can have (Ix, Iy, J) combinations that no isotropic shape
+// reproduces. Picking among three topologies avoids pathological geometries
+// (vanishingly thin walls, etc.) that would make the visualization mislead.
 export type CrossSection =
   | { type: 'cruciform'; w_mm: number; h_mm: number; t_mm: number }
   | { type: 'hollowBox'; W_mm: number; H_mm: number; t_mm: number }
+  | { type: 'filledRect'; b_mm: number; h_mm: number }
   | { type: 'unreachable' };
 
 const CRUCIFORM_T_RATIO_MAX = 0.4;
@@ -64,31 +70,42 @@ export function computeCrossSection(Ix: number, Iy: number, J: number): CrossSec
     return { type: 'cruciform', w_mm: w_c, h_mm: h_c, t_mm: t_c };
   }
 
-  // Hollow box: aspect r = H/W from the thin-walled Ix/Iy cubic (closed form),
-  // then bisect τ = t/min(W,H) so the exact J/Ix matches. The ratio is
-  // monotone-decreasing in τ, so when the target lies outside the box's
-  // reachable range bisection clamps at the boundary — "best fit" given that
-  // Ix and Iy take priority.
+  // Hollow box: aspect r = H/W from the thin-walled Ix/Iy cubic, then bisect
+  // τ = t/min(W,H) so J/Ix matches. Skip if the target J/Ix is above the
+  // thin-walled ceiling for this r — otherwise bisection would drive τ → 0
+  // and we'd render a vanishingly-thin, absurdly large outline.
   const r = solveCubicForR(Ix / Iy);
-  if (!(r > 0) || !Number.isFinite(r)) return { type: 'unreachable' };
-  const minSide = Math.min(1, r);
-  const target = J / Ix;
-  let lo = 1e-4;
-  let hi = 0.4995;
-  for (let i = 0; i < 60; i++) {
-    const mid = 0.5 * (lo + hi);
-    const o = boxOutputs(1, r, mid * minSide);
-    if (o.J / o.Ix > target) lo = mid;
-    else hi = mid;
-    if (hi - lo < 1e-10) break;
+  if (r > 0 && Number.isFinite(r)) {
+    const thinWalledCeil = 12 / ((1 + r) * (3 + r));
+    const target = J / Ix;
+    if (target < thinWalledCeil) {
+      const minSide = Math.min(1, r);
+      let lo = 1e-4;
+      let hi = 0.4995;
+      for (let i = 0; i < 60; i++) {
+        const mid = 0.5 * (lo + hi);
+        const o = boxOutputs(1, r, mid * minSide);
+        if (o.J / o.Ix > target) lo = mid;
+        else hi = mid;
+        if (hi - lo < 1e-10) break;
+      }
+      const tau = 0.5 * (lo + hi);
+      const tn = tau * minSide;
+      const oN = boxOutputs(1, r, tn);
+      if (oN.Ix > 0) {
+        const s = Math.pow(Ix / oN.Ix, 0.25);
+        return { type: 'hollowBox', W_mm: s, H_mm: r * s, t_mm: tn * s };
+      }
+    }
   }
-  const tau = 0.5 * (lo + hi);
-  const tn = tau * minSide;
-  const oN = boxOutputs(1, r, tn);
-  if (!(oN.Ix > 0)) return { type: 'unreachable' };
-  // Degree-4 homogeneity: one length-scale s pins Ix exactly.
-  const s = Math.pow(Ix / oN.Ix, 0.25);
-  return { type: 'hollowBox', W_mm: s, H_mm: r * s, t_mm: tn * s };
+
+  // Solid rectangle. Matches Ix and Iy exactly; J becomes whatever a solid
+  // section of these dimensions happens to give.
+  //   b·h³ = 12·Ix,  b³·h = 12·Iy  ⇒
+  //     h = (12·Ix^(3/2) / Iy^(1/2))^(1/4),   b = h · √(Iy / Ix)
+  const h_r = Math.pow((12 * Math.pow(Ix, 1.5)) / Math.sqrt(Iy), 0.25);
+  const b_r = h_r * Math.sqrt(Iy / Ix);
+  return { type: 'filledRect', b_mm: b_r, h_mm: h_r };
 }
 
 // Exact moments of area and Roark torsion constant for a hollow rectangle.
