@@ -5,7 +5,8 @@ export function bindForm(
   state: BeamState,
   onChange: () => void,
 ) {
-  setInput(form, 'I_mm4', String(state.I_mm4));
+  setInput(form, 'Ix_mm4', String(state.Ix_mm4));
+  setInput(form, 'Iy_mm4', String(state.Iy_mm4));
   setInput(form, 'J_mm4', String(state.J_mm4));
   setInput(form, 'L_mm', String(state.L_mm));
   setInput(form, 'force_kgf', String(state.force_kgf));
@@ -20,11 +21,13 @@ export function bindForm(
 
 function readInto(form: HTMLFormElement, state: BeamState) {
   const data = new FormData(form);
-  const I = Number(data.get('I_mm4'));
+  const Ix = Number(data.get('Ix_mm4'));
+  const Iy = Number(data.get('Iy_mm4'));
   const J = Number(data.get('J_mm4'));
   const L = Number(data.get('L_mm'));
   const F = Number(data.get('force_kgf'));
-  if (Number.isFinite(I) && I > 0) state.I_mm4 = I;
+  if (Number.isFinite(Ix) && Ix > 0) state.Ix_mm4 = Ix;
+  if (Number.isFinite(Iy) && Iy > 0) state.Iy_mm4 = Iy;
   if (Number.isFinite(J) && J > 0) state.J_mm4 = J;
   if (Number.isFinite(L) && L > 0) state.L_mm = L;
   if (Number.isFinite(F)) state.force_kgf = F;

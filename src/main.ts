@@ -1,8 +1,9 @@
 import { Scene, ViewPreset } from './scene';
 import { bindForm } from './ui';
 import {
-  computePeakDeflection,
+  computeDeflection,
   autoDisplayScale,
+  computeCrossSection,
   type DisplayScale,
 } from './physics';
 import { defaultState, BeamState, MATERIALS } from './state';
@@ -21,12 +22,15 @@ const matInfoEl = document.getElementById('material-info') as HTMLElement;
 const form = document.getElementById('beam-form') as HTMLFormElement;
 
 function recompute() {
-  const peak = Math.abs(computePeakDeflection(state));
+  const defl = computeDeflection(state);
   const scale: DisplayScale =
-    scaleMode === 'auto' ? autoDisplayScale(peak, state.L_mm) : scaleMode;
+    scaleMode === 'auto'
+      ? autoDisplayScale(defl.peak_mm, state.L_mm)
+      : scaleMode;
+  const section = computeCrossSection(state.Ix_mm4, state.Iy_mm4, state.J_mm4);
 
-  scene.update(state, peak, scale);
-  deltaEl.textContent = `${fmt2sf(peak)} mm`;
+  scene.update(state, defl, scale, section);
+  deltaEl.textContent = `${fmt2sf(defl.peak_mm)} mm`;
   scaleEl.textContent =
     scaleMode === 'auto' ? `auto (×${scale})` : `×${scale}`;
 
@@ -35,8 +39,6 @@ function recompute() {
     `E = ${fmtModulusGPa(m.E_MPa)} GPa,  G = ${fmtModulusGPa(m.G_MPa)} GPa`;
 }
 
-// 2 significant figures (rounded). Avoids scientific notation for typical
-// mm-range magnitudes; falls back to exponent for very small values.
 function fmt2sf(x: number): string {
   if (!Number.isFinite(x) || x === 0) return '0';
   const exp = Math.floor(Math.log10(Math.abs(x)));

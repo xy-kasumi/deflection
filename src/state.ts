@@ -1,5 +1,11 @@
 // Axis convention (immutable for the whole app):
-//   beam centerline along +X, world up is +Z, force / deflection along -Z.
+//   Beam centerline along world +X; world up is +Z.
+//   Cross-section local frame: x_section = world Y, y_section = world Z.
+//     Ix (about x_section, = ∫z² dA) resists bending that deflects in z_world.
+//     Iy (about y_section, = ∫y² dA) resists bending that deflects in y_world.
+//   Force is transverse with magnitude |F|; direction sweeps the YZ plane, so
+//   the deflection vector traces an ellipse with semi-axes (k/Iy along Y,
+//   k/Ix along Z) where k = |F|·L³/(c·E), c = 3 (cantilever) or 48 (SS).
 
 export type MaterialId = 'PLA' | 'AL' | 'STEEL';
 export type BeamType = 'cantilever' | 'simply-supported';
@@ -21,7 +27,8 @@ export const MATERIALS: Record<MaterialId, Material> = {
 export const KGF_TO_N = 9.80665;
 
 export interface BeamState {
-  I_mm4: number;
+  Ix_mm4: number;
+  Iy_mm4: number;
   J_mm4: number;
   L_mm: number;
   material: MaterialId;
@@ -31,8 +38,9 @@ export interface BeamState {
 
 export function defaultState(): BeamState {
   return {
-    I_mm4: 1000,
-    J_mm4: 2000,
+    Ix_mm4: 1000,
+    Iy_mm4: 1000,
+    J_mm4: 800,
     L_mm: 300,
     material: 'STEEL',
     force_kgf: 1,

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BeamState } from './state';
+import type { Deflection, CrossSection } from './physics';
 
 export type ViewPreset = 'front' | 'side' | 'top' | 'iso';
 
@@ -13,9 +14,11 @@ const PRESETS: Record<ViewPreset, { yawDeg: number; pitchDeg: number }> = {
 const COLOR_BG = 0xffffff;
 const COLOR_BEAM = 0x3b6db5;
 const COLOR_DEFLECTION = 0xd97a1a;
-const COLOR_FORCE = 0xc43d3d;
 const COLOR_SUPPORT = 0x7a8593;
 const COLOR_AXIS = 0xd0d7de;
+const COLOR_SECTION = 0x2c5687;
+
+const SECTION_FRACTION_ALONG_BEAM = 0.2;
 
 const deg = (d: number) => (d * Math.PI) / 180;
 
@@ -58,14 +61,19 @@ export class Scene {
     this.refresh();
   }
 
-  update(s: BeamState, peakMm: number, displayScale: number) {
+  update(s: BeamState, defl: Deflection, displayScale: number, section: CrossSection) {
     this.currentL = s.L_mm;
-    this.rebuildContent(s, peakMm, displayScale);
+    this.rebuildContent(s, defl, displayScale, section);
     this.rebuildAxes(s.L_mm);
     this.refresh();
   }
 
-  private rebuildContent(s: BeamState, peakMm: number, displayScale: number) {
+  private rebuildContent(
+    s: BeamState,
+    defl: Deflection,
+    displayScale: number,
+    section: CrossSection,
+  ) {
     disposeChildren(this.content);
     const L = s.L_mm;
     const r = L / 80;
@@ -77,7 +85,7 @@ export class Scene {
     const beamMat = new THREE.MeshBasicMaterial({
       color: COLOR_BEAM,
       transparent: true,
-      opacity: 0.32,
+      opacity: 0.28,
       depthWrite: false,
     });
     this.content.add(new THREE.Mesh(beamGeom, beamMat));
@@ -95,57 +103,68 @@ export class Scene {
       const pinH = L / 15;
       const pinR = L / 28;
       const pinGeom = new THREE.ConeGeometry(pinR, pinH, 4);
-      pinGeom.rotateX(Math.PI / 2);       // apex from +Y to +Z
-      pinGeom.translate(0, 0, -pinH / 2); // apex at z=0, base at z=-pinH
+      pinGeom.rotateX(Math.PI / 2);
+      pinGeom.translate(0, 0, -pinH / 2);
       const pin1 = new THREE.Mesh(pinGeom, supportMat);
       const pin2 = new THREE.Mesh(pinGeom, supportMat);
       pin2.position.x = L;
       this.content.add(pin1, pin2);
     }
 
-    // Load point and exaggerated deflection.
+    // Deflection ellipse at the load point: in YZ plane, semi-axes (ax along Y,
+    // ay along Z). Force can point in any transverse direction with the same
+    // magnitude, so the deflection traces this closed locus.
     const loadX = s.beamType === 'cantilever' ? L : L / 2;
-    const peakAbs = Math.max(0, peakMm);
-    const displayDelta = peakAbs * displayScale; // mm in scene
-    const renderDeflection = peakAbs > 0 && displayDelta > L * 0.003;
-    const renderForce = Math.abs(s.force_kgf) > 0;
-
-    if (renderDeflection) {
-      const headLen = Math.min(displayDelta * 0.3, L / 18);
-      const headWid = headLen * 0.5;
-      const arrow = new THREE.ArrowHelper(
-        new THREE.Vector3(0, 0, -1),
-        new THREE.Vector3(loadX, 0, 0),
-        displayDelta,
-        COLOR_DEFLECTION,
-        headLen,
-        headWid,
-      );
-      this.content.add(arrow);
+    const ax = defl.ax_mm * displayScale;
+    const ay = defl.ay_mm * displayScale;
+    const tubeR = L / 220;
+    if (defl.peak_mm > 0 && Math.max(ax, ay) > tubeR * 1.5) {
+      const N = 96;
+      const pts: THREE.Vector3[] = [];
+      for (let i = 0; i < N; i++) {
+        const th = (i / N) * 2 * Math.PI;
+        pts.push(new THREE.Vector3(loadX, ax * Math.cos(th), ay * Math.sin(th)));
+      }
+      const curve = new THREE.CatmullRomCurve3(pts, true);
+      const geom = new THREE.TubeGeometry(curve, N * 2, tubeR, 6, true);
+      const mat = new THREE.MeshBasicMaterial({ color: COLOR_DEFLECTION });
+      this.content.add(new THREE.Mesh(geom, mat));
     }
 
-    if (renderForce) {
-      // Force arrow lives above the *undeformed* beam at the load point and
-      // points down to it. The deflection arrow continues downward from there.
-      // Stacking the two avoids the overlap that you get when both terminate
-      // at the deflected tip.
-      const forceLen = L / 4;
-      const tail = new THREE.Vector3(loadX, 0, forceLen);
-      const arrow = new THREE.ArrowHelper(
-        new THREE.Vector3(0, 0, -1),
-        tail,
-        forceLen,
-        COLOR_FORCE,
-        forceLen * 0.22,
-        forceLen * 0.11,
-      );
-      this.content.add(arrow);
+    // Cross-section: small extruded slab at x ≈ 0.2 L, in actual mm so the
+    // user gets a sense of section-vs-length proportion.
+    this.addCrossSection(SECTION_FRACTION_ALONG_BEAM * L, L, section);
+  }
+
+  private addCrossSection(xSec: number, L: number, section: CrossSection) {
+    if (section.type === 'unreachable') return;
+    const eps = L * 0.04;
+    const mat = new THREE.MeshBasicMaterial({ color: COLOR_SECTION });
+
+    if (section.type === 'cruciform') {
+      const { w_mm, h_mm, t_mm } = section;
+      const horiz = new THREE.Mesh(new THREE.BoxGeometry(eps, w_mm, t_mm), mat);
+      const vert = new THREE.Mesh(new THREE.BoxGeometry(eps, t_mm, h_mm), mat);
+      horiz.position.x = xSec;
+      vert.position.x = xSec;
+      this.content.add(horiz, vert);
+    } else {
+      const { W_mm, H_mm, t_mm } = section;
+      const top = new THREE.Mesh(new THREE.BoxGeometry(eps, W_mm, t_mm), mat);
+      top.position.set(xSec, 0, H_mm / 2 - t_mm / 2);
+      const bot = new THREE.Mesh(new THREE.BoxGeometry(eps, W_mm, t_mm), mat);
+      bot.position.set(xSec, 0, -H_mm / 2 + t_mm / 2);
+      const inner = H_mm - 2 * t_mm;
+      const left = new THREE.Mesh(new THREE.BoxGeometry(eps, t_mm, inner), mat);
+      left.position.set(xSec, -W_mm / 2 + t_mm / 2, 0);
+      const right = new THREE.Mesh(new THREE.BoxGeometry(eps, t_mm, inner), mat);
+      right.position.set(xSec, W_mm / 2 - t_mm / 2, 0);
+      this.content.add(top, bot, left, right);
     }
   }
 
   private rebuildAxes(L: number) {
     disposeChildren(this.axes);
-    // Simple ground grid line + origin tick to give the view a reference frame.
     const mat = new THREE.LineBasicMaterial({ color: COLOR_AXIS });
     const positions = new Float32Array([
       -L * 0.1, 0, 0,
@@ -164,7 +183,7 @@ export class Scene {
   private updateCamera() {
     const L = this.currentL;
     const target = new THREE.Vector3(L / 2, 0, 0);
-    const elev = -this.pitch; // pitch=-π/2  =>  elev=π/2 (top)
+    const elev = -this.pitch;
     const ce = Math.cos(elev);
     const se = Math.sin(elev);
     const sy = Math.sin(this.yaw);
@@ -176,7 +195,6 @@ export class Scene {
       target.z + r * se,
     );
     if (Math.abs(ce) < 0.01) {
-      // gimbal-lock fallback for top / bottom view
       this.camera.up.set(-sy, cy, 0);
     } else {
       this.camera.up.set(0, 0, 1);
