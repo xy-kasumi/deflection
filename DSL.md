@@ -46,3 +46,13 @@ semantics
 * Default unit is "mm", "kgf", "mm4"
 * `horz` is ambiguous other than for the root beam
 * `end` is assumed for omitted loc-spec
+* `support` environment defines boundary conditions on the **root beam**
+  (the first beam). Subsequent beams attach as appendages — they transmit
+  load into the root beam through their attachment point but have no
+  boundary conditions of their own.
+    * `support(single)`: cantilever — root beam clamped at its start.
+    * `support(both)`: fixed-fixed — root beam clamped at both ends, with
+      its axis direction left free (so axial strain isn't over-constrained).
+      Models the "both ends rigidly bracketed / bolted down" case;
+      a floppy multi-pillar frame (slender posts) would need a separate
+      model.

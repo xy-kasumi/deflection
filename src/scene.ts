@@ -12,7 +12,7 @@ const COLOR_JOINT = 0x444b53;
 const COLOR_ATTACHMENT = 0xd97a1a;
 const COLOR_UP_MARKER = 0x2e7d32;
 const COLOR_DEFORMED = 0xd97a1a;
-const COLOR_TIP_ARROW = 0xd62828;
+const COLOR_HEADLINE_ARROW = 0xd62828;
 
 const MATERIAL_COLORS: Record<string, number> = {
   plastic: 0xc7b56b,
@@ -208,7 +208,7 @@ export class Scene {
         d.clone().normalize(),
         headlinePos,
         len,
-        COLOR_TIP_ARROW,
+        COLOR_HEADLINE_ARROW,
         Math.min(len * 0.4, maxDim * 0.05),
         Math.min(len * 0.25, maxDim * 0.03),
       );

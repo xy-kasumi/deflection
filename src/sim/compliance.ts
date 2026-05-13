@@ -18,17 +18,29 @@ export interface Node {
   offset_mm: number;
 }
 
+// Load node: 'force' for user-applied loads; 'moment' appears synthetically
+// for the fixed-fixed clamp-moment reaction, paired with a synthetic
+// clamp-force reaction. After the fixed-fixed adjust both synthetic loads
+// are popped, so externally `loadNodes` is all 'force'.
+export interface LoadNode extends Node {
+  kind: 'force' | 'moment';
+}
+
 export interface ComplianceEntry {
   queryIx: number;
   loadIx: number;
   beamIx: number;
   mode: Mode;
-  C: Mat3; // displacement_at_query (world) ←  force_at_load (world)
+  // displacement_at_query (world) ← generalized_force_at_load (world).
+  // The columns of C are interpreted per the load's `kind`: a 'force' load
+  // means each column is the response to a unit world force in that axis;
+  // a 'moment' load means each column is the response to a unit world moment.
+  C: Mat3;
 }
 
 export interface Compliances {
   queryNodes: Node[];          // one per beam end (chain joints)
-  loadNodes: Node[];           // one per force attachment
+  loadNodes: LoadNode[];       // real force loads (post-adjust, no synthetic)
   loadFmax_N: number[];        // parallel to loadNodes
   entries: ComplianceEntry[];  // sparse: only nonzero (q, p, b, m)
   // Precomputed C_tot[q][p] for fast δ(d) evaluation.
@@ -50,14 +62,14 @@ export function buildCompliances(
 
   // Query nodes: candidate is each beam's beginning *and* end, deduped by
   // world position so a beam-end that coincides with the next beam's beginning
-  // is counted once. We drop the origin (always fixed by support(single)),
-  // but keep the tip even for support(both) because the pin-roller solve below
-  // needs its compliance entries — run.ts will hide the constrained tip from
-  // the public node list.
+  // is counted once. Origin is dropped (clamped under any support). The root
+  // beam's end is retained even under support(both) because the fixed-fixed
+  // solve below needs its compliance entries — run.ts hides it from the
+  // public node list.
   const queryNodes: Node[] = buildQueryNodes(beams);
 
   // Load nodes: one per force attachment (in chain order).
-  const loadNodes: Node[] = [];
+  const loadNodes: LoadNode[] = [];
   const loadFmax_N: number[] = [];
   for (let i = 0; i < beams.length; i++) {
     const b = beams[i] as BeamNode;
@@ -65,23 +77,28 @@ export function buildCompliances(
       if (att.def.name !== 'force') continue;
       const F = forceMagnitudeN(att.def);
       if (F <= 0) continue;
-      loadNodes.push({ beamIx: i, offset_mm: att.local_mm });
+      loadNodes.push({ beamIx: i, offset_mm: att.local_mm, kind: 'force' });
       loadFmax_N.push(F);
     }
   }
 
-  // For support(both), append a synthetic load node at the chain tip — the
-  // unknown reaction force the tip support contributes. We build cantilever
-  // compliance with this extra load, then solve for the reaction in a
-  // perpendicular-to-chord plane (force/flexibility method).
+  // For support(both), append two synthetic loads at the root beam's end:
+  // the reaction force and reaction moment that clamp it. Build cantilever
+  // compliance with these extras, then solve a 4×4 compatibility system for
+  // the chord-perpendicular reaction components (chord = root beam axis;
+  // force/flexibility method).
   const supportKind = getSupportKind(structure);
-  const pinRoller = supportKind === 'both' && beams.length > 0;
-  let tipLoadIx = -1;
-  if (pinRoller) {
-    const last = beams.length - 1;
-    tipLoadIx = loadNodes.length;
-    loadNodes.push({ beamIx: last, offset_mm: beams[last]!.length_mm });
+  const fixedFixed = supportKind === 'both' && beams.length > 0;
+  let clampForceLoadIx = -1;
+  let clampMomentLoadIx = -1;
+  if (fixedFixed) {
+    const rootEnd = beams[0]!.length_mm;
+    clampForceLoadIx = loadNodes.length;
+    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'force' });
     loadFmax_N.push(0); // placeholder; reaction is derived, not user-supplied.
+    clampMomentLoadIx = loadNodes.length;
+    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'moment' });
+    loadFmax_N.push(0);
   }
 
   // Precompute per-beam rotation matrix R_i (frame columns) and tip world pos.
@@ -93,8 +110,20 @@ export function buildCompliances(
   const entries: ComplianceEntry[] = [];
   const totalsMap = new Map<string, Mat3>();
 
+  // For fixed-fixed: rotation compliance at the *root beam's end* per load,
+  // computed alongside displacement compliance in the same sweep. World-frame
+  // 3×3, columns indexed by world axis of the unit input (force or moment).
+  const rootEndOffset = beams.length > 0 ? beams[0]!.length_mm : 0;
+  const clampQueryIx = fixedFixed
+    ? queryNodes.findIndex(
+        (n) => n.beamIx === 0 && n.offset_mm === rootEndOffset,
+      )
+    : -1;
+  const collectClampRot = fixedFixed && clampQueryIx >= 0;
+  const clampRot: Mat3[] = collectClampRot ? loadNodes.map(() => newMat3()) : [];
+
   for (let p = 0; p < loadNodes.length; p++) {
-    const ln = loadNodes[p] as Node;
+    const ln = loadNodes[p] as LoadNode;
     const k = ln.beamIx;
     const s_p = ln.offset_mm;
     const loadWorldPos = addV(
@@ -141,17 +170,30 @@ export function buildCompliances(
         const eBendIy = newMat3();
 
         for (let j = 0; j < 3; j++) {
-          const F_world: Vec3 = j === 0 ? [1, 0, 0] : j === 1 ? [0, 1, 0] : [0, 0, 1];
-          // Local-frame load on beam i.
-          const F_local = matVec(R_iT, F_world);
-          let M_local: Vec3 = [0, 0, 0];
-          if (!onLoadBeam) {
-            // Effective tip load on beam i: F at world location of load.
-            // Moment about beam i's tip = (loadWorldPos - tip_i) × F_world.
-            const armToLoad = subV(loadWorldPos, tip_i);
-            const M_world = crossV(armToLoad, F_world);
-            M_local = matVec(R_iT, M_world);
+          const dir_world: Vec3 = j === 0 ? [1, 0, 0] : j === 1 ? [0, 1, 0] : [0, 0, 1];
+
+          // Effective (F, M) at beam i's tip in WORLD frame.
+          // - 'force' load: F = unit force in world axis j; M = arm × F when
+          //   the load is downstream of beam i (zero when on beam i itself).
+          // - 'moment' load: F = 0; M = unit moment in world axis j (a free
+          //   vector — transports unchanged from load location to beam i's
+          //   tip because F = 0).
+          let F_world: Vec3;
+          let M_world: Vec3;
+          if (ln.kind === 'force') {
+            F_world = dir_world;
+            if (onLoadBeam) {
+              M_world = [0, 0, 0];
+            } else {
+              const armToLoad = subV(loadWorldPos, tip_i);
+              M_world = crossV(armToLoad, F_world);
+            }
+          } else {
+            F_world = [0, 0, 0];
+            M_world = dir_world;
           }
+          const F_local = matVec(R_iT, F_world);
+          const M_local = matVec(R_iT, M_world);
 
           // Per-mode local-frame deflection + rotation at s_eval.
           const ax = modeAxial(F_local, s_load_local, s_eval_local, mat.E_MPa, sect.A_mm2);
@@ -164,6 +206,22 @@ export function buildCompliances(
           setMatCol(eTorsion, j, worldContribution(R_i, to,  arm));
           setMatCol(eBendIx,  j, worldContribution(R_i, bx,  arm));
           setMatCol(eBendIy,  j, worldContribution(R_i, by,  arm));
+
+          // Clamp-point rotation collection (fixed-fixed). Sum rotation across
+          // all four modes; rotation is a free vector, so world rotation at
+          // beam i's tip is just R_i · rot_local, accumulated across beams.
+          if (collectClampRot && q === clampQueryIx) {
+            const rotLocalX = ax.rot[0] + to.rot[0] + bx.rot[0] + by.rot[0];
+            const rotLocalY = ax.rot[1] + to.rot[1] + bx.rot[1] + by.rot[1];
+            const rotLocalZ = ax.rot[2] + to.rot[2] + bx.rot[2] + by.rot[2];
+            const rW0 = R_i[0] * rotLocalX + R_i[1] * rotLocalY + R_i[2] * rotLocalZ;
+            const rW1 = R_i[3] * rotLocalX + R_i[4] * rotLocalY + R_i[5] * rotLocalZ;
+            const rW2 = R_i[6] * rotLocalX + R_i[7] * rotLocalY + R_i[8] * rotLocalZ;
+            const T = clampRot[p]!;
+            T[0 + j] = (T[0 + j] as number) + rW0;
+            T[3 + j] = (T[3 + j] as number) + rW1;
+            T[6 + j] = (T[6 + j] as number) + rW2;
+          }
         }
 
         if (!isZeroMat(eAxial))   { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'axial',   C: eAxial   }); addMat(totalC, eAxial); }
@@ -176,26 +234,29 @@ export function buildCompliances(
     }
   }
 
-  if (pinRoller) {
-    const adjusted = applyPinRoller(
-      beams, queryNodes, loadNodes, entries, totalsMap, tipLoadIx,
+  if (fixedFixed) {
+    const adjusted = applyFixedFixed(
+      beams, queryNodes, loadNodes, entries, totalsMap, clampRot,
+      clampForceLoadIx, clampMomentLoadIx,
     );
     if (!adjusted) {
-      // Couldn't apply (degenerate chord etc.) — drop the synthesized tip load
-      // and fall back to cantilever. A diagnostic is added below.
-      loadNodes.pop();
-      loadFmax_N.pop();
+      // Couldn't apply (degenerate chord, singular system) — drop both
+      // synthesized clamp loads and fall back to cantilever.
+      const dropIxs = new Set([clampForceLoadIx, clampMomentLoadIx]);
+      // Pop the two synthetic load nodes (added last, so pop twice).
+      loadNodes.pop(); loadFmax_N.pop();
+      loadNodes.pop(); loadFmax_N.pop();
       for (let i = entries.length - 1; i >= 0; i--) {
-        if (entries[i]!.loadIx === tipLoadIx) entries.splice(i, 1);
+        if (dropIxs.has(entries[i]!.loadIx)) entries.splice(i, 1);
       }
       totalsMap.forEach((_, key) => {
-        if (Number(key.split(',')[1]) === tipLoadIx) totalsMap.delete(key);
+        if (dropIxs.has(Number(key.split(',')[1]))) totalsMap.delete(key);
       });
       diagnostics.push(supportFallbackDiag(structure));
     } else {
-      // Adjustment succeeded; drop the synthesized tip load from public API.
-      loadNodes.pop();
-      loadFmax_N.pop();
+      // Adjustment succeeded; drop the two synthetic clamp loads from public API.
+      loadNodes.pop(); loadFmax_N.pop();
+      loadNodes.pop(); loadFmax_N.pop();
     }
   }
 
@@ -216,88 +277,127 @@ export function buildCompliances(
   };
 }
 
-// ---------- pin-roller (support(both)) ----------
+// ---------- fixed-fixed (support(both)) ----------
 //
-// Force/flexibility method: the released structure is the cantilever already
-// built above; the unknown is the tip's reaction force R, constrained to the
-// plane perpendicular to the root→tip chord (so the chord component is free —
-// otherwise the chain is over-constrained against axial elongation in a way
-// no real bolt-on support enforces).
+// Force/flexibility method. Released structure = the full chain clamped at
+// origin only (cantilever with all appendages). Unknowns at the *root beam's
+// end* (= the second clamp point):
+//   - reaction force  R = R_u·u + R_v·v   (chord-perpendicular plane)
+//   - reaction moment M = M_u·u + M_v·v   (chord-perpendicular plane)
+// The chord is the root beam's axis (origin → root beam's end). The chord-
+// aligned reaction force AND the chord-aligned reaction moment are both left
+// free: the first avoids over-constraining axial elongation, the second
+// avoids fighting torsion that no real bolt-on support enforces.
 //
-// Solve for R from the compatibility condition that the chord-perpendicular
-// component of the tip's displacement is zero:
+// Compatibility: the chord-perpendicular components of the clamp point's
+// displacement and rotation must both vanish. In (u, v) basis, four scalar
+// equations:
 //
-//   P · u_tip_ext  +  P · C_RR · R  =  0
-//   R  =  −P · (P · C_RR · P)⁺ · P · u_tip_ext
-//      =  M_neg · u_tip_ext
+//   u·δ_ext + (u·C_FF·u)R_u + (u·C_FF·v)R_v + (u·C_FM·u)M_u + (u·C_FM·v)M_v = 0
+//   v·δ_ext + ... (similarly with v on the left)                              = 0
+//   u·θ_ext + (u·C_θF·u)R_u + (u·C_θF·v)R_v + (u·C_θM·u)M_u + (u·C_θM·v)M_v = 0
+//   v·θ_ext + ...                                                              = 0
 //
-// where C_RR = C_tot[q_tip][tip_load], P = I − e·eᵀ. Then the effective
-// compliance from a real load p to query q becomes
+// where (3×3 self-compliance at the clamp point):
+//   C_FF = clamp-displacement ← clamp-force,  totalsMap[q_clamp][clamp_force_load]
+//   C_FM = clamp-displacement ← clamp-moment, totalsMap[q_clamp][clamp_moment_load]
+//   C_θF = clamp-rotation     ← clamp-force,  clampRot[clamp_force_load]
+//   C_θM = clamp-rotation     ← clamp-moment, clampRot[clamp_moment_load]
 //
-//   C_eff[q][p]  =  C_tot[q][p]  +  C_tot[q][tip] · M_p,
-//   M_p          =  M_neg · C_tot[q_tip][p].
+// Solving the 4×4 once per RHS column j gives world reaction matrices
+// R_world[p] (3×3, col j = reaction force for unit world force-j at load p)
+// and M_world[p] (3×3, col j = reaction moment for the same). Effective
+// compliance from a real load p to query q decomposes as:
 //
-// Per-(beam, mode) attribution decomposes the same way: each beam's effective
-// entry gets the indirect-via-tip term added on top of its direct entry.
+//   C_eff[q][p]  =  C_tot[q][p]
+//                  + C_tot[q][clamp_force]  · R_world[p]
+//                  + C_tot[q][clamp_moment] · M_world[p]
 //
-// Caveat: the root is still treated as fully clamped, so this is a
-// propped-cantilever model, not classical pinned-pinned. Good enough as a
-// rigid-bolted support model; not the textbook simply-supported beam.
-function applyPinRoller(
+// Per-(beam, mode) attribution uses the same recipe on each (b, m) entry.
+function applyFixedFixed(
   beams: BeamNode[],
   queryNodes: Node[],
-  loadNodes: Node[],
+  loadNodes: LoadNode[],
   entries: ComplianceEntry[],
   totalsMap: Map<string, Mat3>,
-  tipLoadIx: number,
+  clampRot: Mat3[],
+  clampForceLoadIx: number,
+  clampMomentLoadIx: number,
 ): boolean {
-  const tipNode = loadNodes[tipLoadIx];
-  if (!tipNode) return false;
-  const last = beams[tipNode.beamIx];
-  if (!last) return false;
-  const tipWorld: Vec3 = addV(
-    last.startFrame.origin,
-    scaleV(last.startFrame.fwd, tipNode.offset_mm),
+  const clampForceNode = loadNodes[clampForceLoadIx];
+  const clampMomentNode = loadNodes[clampMomentLoadIx];
+  if (!clampForceNode || !clampMomentNode) return false;
+  const rootBeam = beams[clampForceNode.beamIx];
+  if (!rootBeam) return false;
+  const clampWorld: Vec3 = addV(
+    rootBeam.startFrame.origin,
+    scaleV(rootBeam.startFrame.fwd, clampForceNode.offset_mm),
   );
-  const chordLen = Math.hypot(tipWorld[0], tipWorld[1], tipWorld[2]);
+  const chordLen = Math.hypot(clampWorld[0], clampWorld[1], clampWorld[2]);
   if (chordLen < 1e-9) return false;
-  const e: Vec3 = [tipWorld[0] / chordLen, tipWorld[1] / chordLen, tipWorld[2] / chordLen];
+  const e: Vec3 = [clampWorld[0] / chordLen, clampWorld[1] / chordLen, clampWorld[2] / chordLen];
 
   // Orthonormal basis of the chord-perpendicular plane.
   const [u, v] = orthoBasisFromChord(e);
 
-  const tipQueryIx = queryNodes.findIndex(
-    (n) => n.beamIx === tipNode.beamIx && n.offset_mm === tipNode.offset_mm,
+  const clampQueryIx = queryNodes.findIndex(
+    (n) => n.beamIx === clampForceNode.beamIx && n.offset_mm === clampForceNode.offset_mm,
   );
-  if (tipQueryIx < 0) return false;
-  const C_RR = totalsMap.get(`${tipQueryIx},${tipLoadIx}`);
-  if (!C_RR) return false;
+  if (clampQueryIx < 0) return false;
 
-  // 2×2 in (u, v) basis.
-  const Cuu = quad(u, C_RR, u);
-  const Cuv = quad(u, C_RR, v);
-  const Cvu = quad(v, C_RR, u);
-  const Cvv = quad(v, C_RR, v);
-  const det = Cuu * Cvv - Cuv * Cvu;
-  if (!Number.isFinite(det) || Math.abs(det) < 1e-18) return false;
-  const Iuu =  Cvv / det;
-  const Iuv = -Cuv / det;
-  const Ivu = -Cvu / det;
-  const Ivv =  Cuu / det;
+  const C_FF = totalsMap.get(`${clampQueryIx},${clampForceLoadIx}`);
+  const C_FM = totalsMap.get(`${clampQueryIx},${clampMomentLoadIx}`);
+  const K_FF = clampRot[clampForceLoadIx];
+  const K_FM = clampRot[clampMomentLoadIx];
+  if (!C_FF || !C_FM || !K_FF || !K_FM) return false;
 
-  // M_neg = −(Iuu u uᵀ + Iuv u vᵀ + Ivu v uᵀ + Ivv v vᵀ).
-  const M_neg = newMat3();
-  addOuter(M_neg, u, u, -Iuu);
-  addOuter(M_neg, u, v, -Iuv);
-  addOuter(M_neg, v, u, -Ivu);
-  addOuter(M_neg, v, v, -Ivv);
+  // Build the 4×4 system matrix A in (u, v) basis.
+  // Rows: [u·δ, v·δ, u·θ, v·θ]. Columns: [R_u, R_v, M_u, M_v].
+  const A = new Array(16).fill(0) as number[];
+  A[0]  = quad(u, C_FF, u); A[1]  = quad(u, C_FF, v); A[2]  = quad(u, C_FM, u); A[3]  = quad(u, C_FM, v);
+  A[4]  = quad(v, C_FF, u); A[5]  = quad(v, C_FF, v); A[6]  = quad(v, C_FM, u); A[7]  = quad(v, C_FM, v);
+  A[8]  = quad(u, K_FF, u); A[9]  = quad(u, K_FF, v); A[10] = quad(u, K_FM, u); A[11] = quad(u, K_FM, v);
+  A[12] = quad(v, K_FF, u); A[13] = quad(v, K_FF, v); A[14] = quad(v, K_FM, u); A[15] = quad(v, K_FM, v);
 
-  // M_p[p] = M_neg · C_tot[q_tip][p] for each real load p.
-  const realLoadCount = loadNodes.length - 1; // tip is the last entry.
-  const M_p: Mat3[] = [];
+  // For each real load p, solve A·X = B where B is the 4×3 negated cantilever
+  // response (chord-perp components of clamp-point displacement and rotation),
+  // then project X back to world to get R_world[p] and M_world[p] (3×3 each).
+  const realLoadCount = loadNodes.length - 2; // last two are synthetic
+  const R_world: Mat3[] = [];
+  const M_world: Mat3[] = [];
+
   for (let p = 0; p < realLoadCount; p++) {
-    const C_tp = totalsMap.get(`${tipQueryIx},${p}`) ?? newMat3();
-    M_p.push(matMul3(M_neg, C_tp));
+    const C_tp = totalsMap.get(`${clampQueryIx},${p}`) ?? newMat3();
+    const K_tp = clampRot[p] ?? newMat3();
+    const B = new Array(12).fill(0) as number[]; // 4 rows, 3 cols
+    for (let j = 0; j < 3; j++) {
+      const d0 = C_tp[0 + j] as number, d1 = C_tp[3 + j] as number, d2 = C_tp[6 + j] as number;
+      const r0 = K_tp[0 + j] as number, r1 = K_tp[3 + j] as number, r2 = K_tp[6 + j] as number;
+      B[0 * 3 + j] = -(u[0] * d0 + u[1] * d1 + u[2] * d2);
+      B[1 * 3 + j] = -(v[0] * d0 + v[1] * d1 + v[2] * d2);
+      B[2 * 3 + j] = -(u[0] * r0 + u[1] * r1 + u[2] * r2);
+      B[3 * 3 + j] = -(v[0] * r0 + v[1] * r1 + v[2] * r2);
+    }
+
+    const X = solve4x3(A, B);
+    if (!X) return false;
+
+    const Rp = newMat3();
+    const Mp = newMat3();
+    for (let j = 0; j < 3; j++) {
+      const Ru = X[0 * 3 + j] as number;
+      const Rv = X[1 * 3 + j] as number;
+      const Mu = X[2 * 3 + j] as number;
+      const Mv = X[3 * 3 + j] as number;
+      Rp[0 + j] = Ru * u[0] + Rv * v[0];
+      Rp[3 + j] = Ru * u[1] + Rv * v[1];
+      Rp[6 + j] = Ru * u[2] + Rv * v[2];
+      Mp[0 + j] = Mu * u[0] + Mv * v[0];
+      Mp[3 + j] = Mu * u[1] + Mv * v[1];
+      Mp[6 + j] = Mu * u[2] + Mv * v[2];
+    }
+    R_world.push(Rp);
+    M_world.push(Mp);
   }
 
   // Build (q, p, b, m) → Mat3 lookup over current entries.
@@ -306,19 +406,21 @@ function applyPinRoller(
     entryMap.set(`${en.queryIx},${en.loadIx},${en.beamIx},${en.mode}`, en.C);
   }
 
-  // Adjust every real-load entry by the via-tip term.
+  // Adjust every real-load entry: direct + via clamp-force·R + via clamp-moment·M.
   const allModes: Mode[] = ['axial', 'torsion', 'bendIx', 'bendIy'];
   const adjusted = new Map<string, Mat3>();
   for (let q = 0; q < queryNodes.length; q++) {
     for (let p = 0; p < realLoadCount; p++) {
       for (let b = 0; b < beams.length; b++) {
         for (const mode of allModes) {
-          const direct = entryMap.get(`${q},${p},${b},${mode}`);
-          const viaTip = entryMap.get(`${q},${tipLoadIx},${b},${mode}`);
-          if (!direct && !viaTip) continue;
+          const direct    = entryMap.get(`${q},${p},${b},${mode}`);
+          const viaClampF = entryMap.get(`${q},${clampForceLoadIx},${b},${mode}`);
+          const viaClampM = entryMap.get(`${q},${clampMomentLoadIx},${b},${mode}`);
+          if (!direct && !viaClampF && !viaClampM) continue;
           const out = newMat3();
-          if (direct) addMat(out, direct);
-          if (viaTip) addMat(out, matMul3(viaTip, M_p[p]!));
+          if (direct)    addMat(out, direct);
+          if (viaClampF) addMat(out, matMul3(viaClampF, R_world[p]!));
+          if (viaClampM) addMat(out, matMul3(viaClampM, M_world[p]!));
           if (isZeroMat(out)) continue;
           adjusted.set(`${q},${p},${b},${mode}`, out);
         }
@@ -326,7 +428,7 @@ function applyPinRoller(
     }
   }
 
-  // Replace entries (drop tip-load entries; replace real-load entries).
+  // Replace entries (drop synthetic-clamp entries; replace real-load entries).
   entries.length = 0;
   for (const [key, C] of adjusted) {
     const [qStr, pStr, bStr, mStr] = key.split(',');
@@ -348,6 +450,48 @@ function applyPinRoller(
     addMat(tot, en.C);
   }
   return true;
+}
+
+// Gauss-Jordan elimination on [A | B] (4×4 augmented with 4×3 RHS).
+// Returns X (4×3 row-major) or null if A is singular.
+function solve4x3(A: number[], B: number[]): number[] | null {
+  const N = 4, M = 3, W = N + M;
+  const aug = new Array(N * W).fill(0) as number[];
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < N; c++) aug[r * W + c] = A[r * N + c] as number;
+    for (let c = 0; c < M; c++) aug[r * W + N + c] = B[r * M + c] as number;
+  }
+  for (let i = 0; i < N; i++) {
+    let pivotRow = i;
+    let pivotVal = Math.abs(aug[i * W + i] as number);
+    for (let r = i + 1; r < N; r++) {
+      const v = Math.abs(aug[r * W + i] as number);
+      if (v > pivotVal) { pivotVal = v; pivotRow = r; }
+    }
+    if (!Number.isFinite(pivotVal) || pivotVal < 1e-18) return null;
+    if (pivotRow !== i) {
+      for (let c = 0; c < W; c++) {
+        const tmp = aug[i * W + c] as number;
+        aug[i * W + c] = aug[pivotRow * W + c] as number;
+        aug[pivotRow * W + c] = tmp;
+      }
+    }
+    const inv = 1 / (aug[i * W + i] as number);
+    for (let c = 0; c < W; c++) aug[i * W + c] = (aug[i * W + c] as number) * inv;
+    for (let r = 0; r < N; r++) {
+      if (r === i) continue;
+      const factor = aug[r * W + i] as number;
+      if (factor === 0) continue;
+      for (let c = 0; c < W; c++) {
+        aug[r * W + c] = (aug[r * W + c] as number) - factor * (aug[i * W + c] as number);
+      }
+    }
+  }
+  const X = new Array(N * M).fill(0) as number[];
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < M; c++) X[r * M + c] = aug[r * W + N + c] as number;
+  }
+  return X;
 }
 
 export function getSupportKind(structure: Structure): 'single' | 'both' | undefined {
@@ -391,7 +535,7 @@ function supportFallbackDiag(structure: Structure): Diagnostic {
   const envSpan = structure.envs.find((e) => e.name === 'support')?.span ?? { start: 0, end: 0 };
   return {
     severity: 'warning',
-    message: 'support(both): chord is degenerate or compliance is singular — falling back to support(single)',
+    message: 'support(both): chord is degenerate or 4×4 compliance is singular — falling back to support(single)',
     span: envSpan,
   };
 }
@@ -561,12 +705,6 @@ function quad(u: Vec3, M: Mat3, v: Vec3): number {
   return u[0] * (M[0] * v[0] + M[1] * v[1] + M[2] * v[2])
        + u[1] * (M[3] * v[0] + M[4] * v[1] + M[5] * v[2])
        + u[2] * (M[6] * v[0] + M[7] * v[1] + M[8] * v[2]);
-}
-
-function addOuter(into: Mat3, a: Vec3, b: Vec3, s: number): void {
-  into[0] += s * a[0] * b[0]; into[1] += s * a[0] * b[1]; into[2] += s * a[0] * b[2];
-  into[3] += s * a[1] * b[0]; into[4] += s * a[1] * b[1]; into[5] += s * a[1] * b[2];
-  into[6] += s * a[2] * b[0]; into[7] += s * a[2] * b[1]; into[8] += s * a[2] * b[2];
 }
 
 // Returns two orthonormal vectors spanning the plane perpendicular to `e`.

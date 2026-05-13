@@ -242,13 +242,12 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 }
 
 // Test 5: support(both), single horz beam steel rect(W10 H10) L100, force at
-// midpoint. Propped cantilever: chord = +X, perp plane = YZ. Tip Y/Z must be
-// pinned to zero; chord (axial X) is released and matches cantilever axial.
-//
-// Classical reaction for a fixed-pin beam under centered load: R = 5P/16 at
-// the pinned end. Compliance picture: C_eff[tip][p][y,y] = 5L³/48EIx +
-// (L³/3EIx)·(-5/16) = 0. So we verify that the perpendicular tip cells are
-// exactly zero post-adjust.
+// midpoint. Fixed-fixed: chord = +X, perp plane = YZ. Tip Y/Z displacement
+// must be zero (clamped); tip rotation about Y/Z must also be zero. Chord
+// (axial X) is the one remaining free DOF and matches cantilever axial.
+// We verify the perp tip displacement cells go to zero post-adjust; the
+// rotation constraint is enforced inside the 4×4 solve but isn't directly
+// observable from C_eff (which reports displacement).
 {
   const src = 'support(both)\nhorz beam(steel rect(W10 H10) L100) mid:force(1kgf)';
   const { structure } = parse(src);
@@ -316,31 +315,41 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   }
 }
 
-// Test 7: support(both) drops the tip from visible nodes; compliance still has
-// the tip for the pin-roller solve (4 queries) but run.ts hides it (3 nodes).
+// Test 7: support(both) drops the root beam's end from visible nodes (the
+// second clamp point); compliance still keeps it for the fixed-fixed solve.
+// Non-root beam endpoints stay visible.
 {
   const src = 'support(both)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:force(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);
 
-  // Compliance keeps the tip query (needed for the solve).
-  const tipIx = compliances.queryNodes.findIndex(
-    (n) => n.beamIx === beams.length - 1 && n.offset_mm === beams[beams.length - 1]!.length_mm,
+  // Compliance keeps the clamp query (root beam's end), needed for the solve.
+  const rootEnd = beams[0]!.length_mm;
+  const clampIx = compliances.queryNodes.findIndex(
+    (n) => n.beamIx === 0 && n.offset_mm === rootEnd,
   );
-  console.log('\n-- Test 7: support(both) keeps tip in compliance --');
-  if (tipIx < 0) { console.log('FAIL: tip query missing from compliance'); process.exitCode = 1; }
-  else console.log(`ok   tip query at compliance.queryNodes[${tipIx}]`);
+  console.log('\n-- Test 7: support(both) keeps root beam end in compliance --');
+  if (clampIx < 0) { console.log('FAIL: root beam end query missing from compliance'); process.exitCode = 1; }
+  else console.log(`ok   root beam end query at compliance.queryNodes[${clampIx}]`);
 
   const sim = runSim(beams, structure);
   console.log(`SimResult.nodes.length = ${sim.nodes.length}, maxNodeIx = ${sim.maxNodeIx}`);
+  const clampInNodes = sim.nodes.some((n) => {
+    const qn = compliances.queryNodes[n.queryIx]!;
+    return qn.beamIx === 0 && qn.offset_mm === rootEnd;
+  });
+  if (clampInNodes) { console.log('FAIL: root beam end leaked into SimResult.nodes'); process.exitCode = 1; }
+  else console.log('ok   root beam end hidden from SimResult.nodes');
+
+  // Chain tip (end of last beam) is *not* clamped — it should still be visible.
   const last = beams.length - 1;
-  const tipInNodes = sim.nodes.some((n) => {
+  const chainTipVisible = sim.nodes.some((n) => {
     const qn = compliances.queryNodes[n.queryIx]!;
     return qn.beamIx === last && qn.offset_mm === beams[last]!.length_mm;
   });
-  if (tipInNodes) { console.log('FAIL: tip leaked into SimResult.nodes'); process.exitCode = 1; }
-  else console.log('ok   tip hidden from SimResult.nodes');
+  if (!chainTipVisible) { console.log('FAIL: chain tip should be visible under support(both)'); process.exitCode = 1; }
+  else console.log('ok   chain tip (end of last beam) visible (not a clamp point)');
 }
 
 if (process.exitCode) {

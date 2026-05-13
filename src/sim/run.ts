@@ -38,7 +38,7 @@ export type DisplayScale = 1 | 10 | 100 | 1000;
 export interface SimResult {
   nodes: NodeDeflectionResult[];
   // Index into `nodes` of the node with the largest δ_max — the one whose
-  // direction d* drives the attribution breakdown and the tip arrow.
+  // direction d* drives the attribution breakdown and the headline arrow.
   maxNodeIx: number;
   display_scale: DisplayScale;
   forces: SimForce[];
@@ -47,8 +47,8 @@ export interface SimResult {
 }
 
 // Orchestrates compliance build → per-query directional max → attribution at
-// the worst-case query node. Constrained-to-zero nodes (the support(both) tip)
-// are hidden from `nodes` even though compliance keeps them for the solve.
+// the worst-case query node. The root beam's end (clamped under support(both))
+// is hidden from `nodes` even though compliance keeps it for the solve.
 export function runSim(beams: BeamNode[], structure: Structure): SimResult {
   const diagnostics: Diagnostic[] = [];
   if (beams.length === 0) {
@@ -59,16 +59,16 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
   diagnostics.push(...cd);
 
   const supportKind = getSupportKind(structure);
-  const lastBeamIx = beams.length - 1;
-  const lastBeamLen = beams[lastBeamIx]!.length_mm;
+  const rootBeamLen = beams[0]!.length_mm;
 
   // Per-query Directional.max() gives (d*, δ_max) for each query node.
   const nodes: NodeDeflectionResult[] = [];
   compliances.queryNodes.forEach((qn, queryIx) => {
-    // For support(both), hide the pinned tip — it has been constrained to
-    // (near-)zero in the perpendicular plane, so visualizing it just adds
-    // a degenerate surface at the chain's end.
-    if (supportKind === 'both' && qn.beamIx === lastBeamIx && qn.offset_mm === lastBeamLen) return;
+    // Hide the root beam's end under support(both): perpendicular displacement
+    // and rotation are zero by construction at the second clamp point, leaving
+    // only axial elongation — not useful as a deflection surface. The root
+    // beam's start is already excluded as the chain origin.
+    if (supportKind === 'both' && qn.beamIx === 0 && qn.offset_mm === rootBeamLen) return;
     const beam = beams[qn.beamIx]!;
     const worldPos: Vec3 = [
       beam.startFrame.origin[0] + beam.startFrame.fwd[0] * qn.offset_mm,
