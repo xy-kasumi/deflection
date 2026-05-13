@@ -11,7 +11,7 @@ export type Mat3 = [
   number, number, number,
 ];
 
-export type Mode = 'axial' | 'torsion' | 'bendIx' | 'bendIy';
+export type Mode = 'torsion' | 'bendIx' | 'bendIy';
 
 export interface Node {
   beamIx: number;
@@ -103,7 +103,17 @@ export function buildCompliances(
     for (let i = 0; i < beams.length; i++) {
       const b = beams[i] as BeamNode;
       const A = sections[i]!.A_mm2;
-      if (A === null || A <= 0) continue; // moment(...) sections lack area.
+      if (A === null || A <= 0) {
+        // section(...) without A: area unknown, so mass·g body load is
+        // skipped silently — warn so the user knows their beam contributes
+        // no self-weight under the active mass_accel.
+        diagnostics.push({
+          severity: 'warning',
+          message: 'section(...) without A: no mass_accel body load for this beam (add A=… to include self-weight)',
+          span: b.def.span,
+        });
+        continue;
+      }
       const rho = mats[i]!.rho_kg_per_mm3;
       const mass_kg = rho * A * b.length_mm;
       const F_N = mass_kg * accel_m_s2;
@@ -194,7 +204,6 @@ export function buildCompliances(
         const arm = onQueryBeam ? [0, 0, 0] as Vec3 : subV(queryWorldPos, tip_i);
 
         // Three columns of the per-(q, p, i, mode) entry: one per world force axis.
-        const eAxial = newMat3();
         const eTorsion = newMat3();
         const eBendIx = newMat3();
         const eBendIy = newMat3();
@@ -226,24 +235,22 @@ export function buildCompliances(
           const M_local = matVec(R_iT, M_world);
 
           // Per-mode local-frame deflection + rotation at s_eval.
-          const ax = modeAxial(F_local, s_load_local, s_eval_local, mat.E_MPa, sect.A_mm2);
           const to = modeTorsion(M_local, s_load_local, s_eval_local, mat.G_MPa, sect.J_mm4);
           const bx = modeBendIx(F_local, M_local, s_load_local, s_eval_local, mat.E_MPa, sect.Ix_mm4);
           const by = modeBendIy(F_local, M_local, s_load_local, s_eval_local, mat.E_MPa, sect.Iy_mm4);
 
           // Transform to world and apply transport arm.
-          setMatCol(eAxial,   j, worldContribution(R_i, ax,  arm));
           setMatCol(eTorsion, j, worldContribution(R_i, to,  arm));
           setMatCol(eBendIx,  j, worldContribution(R_i, bx,  arm));
           setMatCol(eBendIy,  j, worldContribution(R_i, by,  arm));
 
           // Clamp-point rotation collection (fixed-fixed). Sum rotation across
-          // all four modes; rotation is a free vector, so world rotation at
+          // the modes; rotation is a free vector, so world rotation at
           // beam i's tip is just R_i · rot_local, accumulated across beams.
           if (collectClampRot && q === clampQueryIx) {
-            const rotLocalX = ax.rot[0] + to.rot[0] + bx.rot[0] + by.rot[0];
-            const rotLocalY = ax.rot[1] + to.rot[1] + bx.rot[1] + by.rot[1];
-            const rotLocalZ = ax.rot[2] + to.rot[2] + bx.rot[2] + by.rot[2];
+            const rotLocalX = to.rot[0] + bx.rot[0] + by.rot[0];
+            const rotLocalY = to.rot[1] + bx.rot[1] + by.rot[1];
+            const rotLocalZ = to.rot[2] + bx.rot[2] + by.rot[2];
             const rW0 = R_i[0] * rotLocalX + R_i[1] * rotLocalY + R_i[2] * rotLocalZ;
             const rW1 = R_i[3] * rotLocalX + R_i[4] * rotLocalY + R_i[5] * rotLocalZ;
             const rW2 = R_i[6] * rotLocalX + R_i[7] * rotLocalY + R_i[8] * rotLocalZ;
@@ -254,7 +261,6 @@ export function buildCompliances(
           }
         }
 
-        if (!isZeroMat(eAxial))   { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'axial',   C: eAxial   }); addMat(totalC, eAxial); }
         if (!isZeroMat(eTorsion)) { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'torsion', C: eTorsion }); addMat(totalC, eTorsion); }
         if (!isZeroMat(eBendIx))  { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'bendIx',  C: eBendIx  }); addMat(totalC, eBendIx); }
         if (!isZeroMat(eBendIy))  { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'bendIy',  C: eBendIy  }); addMat(totalC, eBendIy); }
@@ -316,8 +322,9 @@ export function buildCompliances(
 //   - reaction moment M = M_u·u + M_v·v   (chord-perpendicular plane)
 // The chord is the root beam's axis (origin → root beam's end). The chord-
 // aligned reaction force AND the chord-aligned reaction moment are both left
-// free: the first avoids over-constraining axial elongation, the second
-// avoids fighting torsion that no real bolt-on support enforces.
+// free: the first is required because beams are modeled axially rigid (no
+// compliance mode along the chord), the second avoids fighting torsion that
+// no real bolt-on support enforces.
 //
 // Compatibility: the chord-perpendicular components of the clamp point's
 // deflection and rotation must both vanish. In (u, v) basis, four scalar
@@ -437,7 +444,7 @@ function applyFixedFixed(
   }
 
   // Adjust every real-load entry: direct + via clamp-force·R + via clamp-moment·M.
-  const allModes: Mode[] = ['axial', 'torsion', 'bendIx', 'bendIy'];
+  const allModes: Mode[] = ['torsion', 'bendIx', 'bendIy'];
   const adjusted = new Map<string, Mat3>();
   for (let q = 0; q < queryNodes.length; q++) {
     for (let p = 0; p < realLoadCount; p++) {
@@ -611,16 +618,13 @@ function supportFallbackDiag(structure: Structure): Diagnostic {
 // local-frame force F = (F_x, F_y, F_z) and moment M = (M_x, M_y, M_z).
 // Returned `defl` and `rot` are at offset s_eval, in beam-local frame.
 // Modes are decoupled in Euler-Bernoulli with small deflection.
+//
+// Axial extension/compression is not modeled — see README scope notes.
+// Chord-aligned forces produce no deflection contribution; the beam is
+// treated as axially rigid.
 
 interface ModeOut { defl: Vec3; rot: Vec3 }
 const ZERO: ModeOut = { defl: [0, 0, 0], rot: [0, 0, 0] };
-
-function modeAxial(F: Vec3, s_load: number, s_eval: number, E_MPa: number, A_mm2: number | null): ModeOut {
-  if (A_mm2 === null || A_mm2 <= 0 || E_MPa <= 0) return ZERO;
-  // u_z(s) = F_z · min(s, s_load) / (E·A)
-  const u_z = F[2] * Math.min(s_eval, s_load) / (E_MPa * A_mm2);
-  return { defl: [0, 0, u_z], rot: [0, 0, 0] };
-}
 
 function modeTorsion(M: Vec3, s_load: number, s_eval: number, G_MPa: number, J_mm4: number): ModeOut {
   if (J_mm4 <= 0 || G_MPa <= 0) return ZERO;

@@ -47,7 +47,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   console.log('loadNodes:', compliances.loadNodes, 'F:', compliances.loadFmax_N);
   console.log('totals entries:', compliances.totals.length);
   console.log('entries:', compliances.entries.length, 'by mode:',
-    Object.fromEntries(['axial','torsion','bendIx','bendIy'].map((m) =>
+    Object.fromEntries(['torsion','bendIx','bendIy'].map((m) =>
       [m, compliances.entries.filter((e) => e.mode === m).length])));
 
   const total00 = compliances.totals.find((t) => t.queryIx === 0 && t.loadIx === 0);
@@ -60,26 +60,22 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 
   const L = 100;
   const E = MATERIALS.steel.E_MPa; // 200_000 MPa = N/mm²
-  const G = MATERIALS.steel.G_MPa;
   const Ix = (10 * 10 ** 3) / 12; // W·H³/12 = 833.33
   const Iy = (10 ** 3 * 10) / 12;
-  const A = 100;
 
-  // Beam axis = world +X. Beam-Z (axial) = world +X. Beam-Y (walker-up) = world +Y.
-  // Beam-X (walker-right) = world -Z.
+  // Beam axis = world +X. Beam-Z (chord) = world +X. Beam-Y (walker-up) = world +Y.
+  // Beam-X (walker-right) = world -Z. Axial extension not modeled, so the
+  // chord-aligned compliance is zero.
   // Expected:
-  //   u_x / F_x (axial along beam-Z=world+X): L/(E·A)
+  //   u_x / F_x (along beam-Z=world+X): 0 (axially rigid)
   //   u_y / F_y (bend-Ix, F in beam-Y=world+Y): L³/(3·E·Ix)
-  //   u_z / F_z (bend-Iy, F in -X_section world: world+Z = -beam-X):
-  //              same closed form L³/(3·E·Iy)
-  const expAxial = L / (E * A);
+  //   u_z / F_z (bend-Iy): L³/(3·E·Iy)
   const expBendIx = (L ** 3) / (3 * E * Ix);
   const expBendIy = (L ** 3) / (3 * E * Iy);
-  console.log(`  expected L/EA = ${expAxial.toExponential(4)}`);
   console.log(`  expected L³/(3·E·Ix) = ${expBendIx.toExponential(4)}`);
   console.log(`  expected L³/(3·E·Iy) = ${expBendIy.toExponential(4)}`);
 
-  check('C_tot[0][0][x,x] = L/(E·A)',           C[0], expAxial, 1e-12);
+  check('C_tot[0][0][x,x] = 0 (axially rigid)', C[0], 0, 1e-30);
   check('C_tot[0][0][y,y] = L³/(3·E·Ix)',       C[4], expBendIx, 1e-12);
   check('C_tot[0][0][z,z] = L³/(3·E·Iy)',       C[8], expBendIy, 1e-12);
   // No cross-axis coupling for an isotropic square section + symmetric load loc.
@@ -98,10 +94,6 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   if (bendIxEntry) {
     check('bendIx entry [1,1] = total [1,1]', bendIxEntry.C[4], expBendIx, 1e-12);
   }
-  const axialEntry = compliances.entries.find((e) => e.mode === 'axial');
-  if (axialEntry) {
-    check('axial entry [0,0] = total [0,0]', axialEntry.C[0], expAxial, 1e-12);
-  }
 }
 
 // Test 2: two-beam chain. horz L100 then up L100, both steel rect(W10 H10),
@@ -119,9 +111,8 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 // So beam0 sees pure F_y at its own tip → modeBendIx with F_y, M_x=0.
 // Then transport arm to query (0,100,0): rot_world × arm. Tip slope dθ/dx of beam0
 // contributes (rot_x_world) × (0,100,0).
-// Beam1: along +Y, force F_y is axial → beam-Z direction → modeAxial. So beam0
-// contributes bend-Ix Y-deflection L³/(3·E·Ix), and beam1 contributes axial
-// L/(E·A) → tip total u_y = L³/(3·E·Ix) + L/(E·A).
+// Beam1: along +Y, force F_y is along its chord → axially rigid, no contribution.
+// So tip total u_y = L³/(3·E·Ix) from beam0 only.
 {
   const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100)\nup beam(steel rect(W10 H10) L100) end:load(1kgf)';
   const { structure } = parse(src);
@@ -145,7 +136,6 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   const L = 100;
   const E = MATERIALS.steel.E_MPa;
   const Ix = (10 * 10 ** 3) / 12;
-  const A = 100;
 
   // Beam0 contribution (bend-Ix) to u_y at tip: F_y at world(100,100,0).
   // On beam0 with arm_to_load (0,100,0), M_world from F_y is 0 → modeBendIx
@@ -156,11 +146,9 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   // θ_x_world = R_0 · θ_x_local. For beam0 horz, R = [right|up|fwd] cols = [-Z, +Y, +X]
   // So θ_x_local in beam-X (=walker.right=world -Z), θ_x_world = -Z direction.
   // Thus transport_y = 0. Good — beam0 contributes pure L³/(3·E·Ix) to u_y.
-  // Beam1 axial contribution: u_z_local at s=L = F_z_local · L / (E·A). Beam1's
-  // local +Z = world +Y. Force F_y in world → F_local_z = +F_y. So u_y_world =
-  // F_y · L / (E·A). No transport (query = beam1 tip).
-  const exp_uy = (L ** 3) / (3 * E * Ix) + L / (E * A);
-  check('C_tot[tip][last][y,y] = bend(beam0) + axial(beam1)', C[4], exp_uy, 1e-10);
+  // Beam1: F_y is along its chord; axially rigid, no contribution.
+  const exp_uy = (L ** 3) / (3 * E * Ix);
+  check('C_tot[tip][last][y,y] = bend(beam0) only', C[4], exp_uy, 1e-10);
 
   // u_x from F_y: beam0 transports rot to query. θ_x_local in beam-X local dir,
   // R_0 maps local-X to world -Z, so rot_world only has a Z-axis component →
@@ -172,11 +160,10 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 }
 
 // Test 3: Directional on single-beam horz cantilever, load at tip 1kgf.
-// δ(d) = F · |C_tot^T · d|. C_tot is diagonal [L/EA, L³/3EIx, L³/3EIy] (with
-// 2 equal eigenvalues in Y,Z and a tiny one in X). Max is along the largest
-// singular value direction: σ_max = max(L/EA, L³/3EIx, L³/3EIy). With W=H
-// these are 2e-3 (×2) and 5e-6 (×1) — so δ_max = F·L³/(3·E·Ix) and d* should
-// be in the Y-Z plane (any direction there gives the same value).
+// δ(d) = F · |C_tot^T · d|. C_tot is diagonal [0, L³/3EIx, L³/3EIy] (the
+// chord-aligned entry is zero since axial is not modeled; Y and Z entries
+// are equal for W=H). δ_max = F·L³/(3·E·Ix) and d* lies in the Y-Z plane
+// (any direction there gives the same value).
 {
   const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:load(1kgf)';
   const { structure } = parse(src);
@@ -188,14 +175,14 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   const F = KGF_TO_N;
   const expBend = F * (100 ** 3) / (3 * MATERIALS.steel.E_MPa * ((10 * 10 ** 3) / 12));
 
-  check('δ(+x) = F·L/(E·A)',                   dir.at([1, 0, 0]), F * 100 / (MATERIALS.steel.E_MPa * 100), 1e-12);
+  check('δ(+x) = 0 (axially rigid)',           dir.at([1, 0, 0]), 0, 1e-30);
   check('δ(+y) = F·L³/(3·E·Ix)',               dir.at([0, 1, 0]), expBend, 1e-12);
   check('δ(+z) = F·L³/(3·E·Iy)',               dir.at([0, 0, 1]), expBend, 1e-12);
 
   const { d: dStar, value } = dir.max();
   check('max(δ) = F·L³/(3·E·Ix)', value, expBend, 1e-12);
   console.log(`  d* = [${dStar[0].toFixed(4)}, ${dStar[1].toFixed(4)}, ${dStar[2].toFixed(4)}]`);
-  // d* should have ~0 x-component (axial mode is tiny).
+  // d* should have 0 x-component (chord direction is rigid).
   if (Math.abs(dStar[0]) > 1e-3) {
     console.log(`FAIL: d* should be in YZ plane, got x=${dStar[0]}`);
     process.exitCode = 1;
@@ -235,7 +222,6 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   if (r.perBeam.length !== 1) { console.log('FAIL: expected 1 beam'); process.exitCode = 1; }
   else {
     check('beam0 bendIx fraction = 1', r.perBeam[0]!.bendIx_fraction, 1, 1e-12);
-    check('beam0 axial fraction = 0', r.perBeam[0]!.axial_fraction, 0, 1e-12);
     check('beam0 bendIy fraction = 0', r.perBeam[0]!.bendIy_fraction, 0, 1e-12);
     check('beam0 torsion fraction = 0', r.perBeam[0]!.torsion_fraction, 0, 1e-12);
   }
@@ -243,11 +229,12 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 
 // Test 5: support(both), single horz beam steel rect(W10 H10) L100, load at
 // midpoint. Fixed-fixed: chord = +X, perp plane = YZ. Tip Y/Z deflection
-// must be zero (clamped); tip rotation about Y/Z must also be zero. Chord
-// (axial X) is the one remaining free DOF and matches cantilever axial.
-// We verify the perp tip deflection cells go to zero post-adjust; the
-// rotation constraint is enforced inside the 4×4 solve but isn't directly
-// observable from C_eff (which reports deflection).
+// must be zero (clamped); tip rotation about Y/Z must also be zero. The
+// chord-aligned compliance is also zero — axial is not modeled, so the
+// chord direction is rigid by construction. We verify the perp tip
+// deflection cells go to zero post-adjust; the rotation constraint is
+// enforced inside the 4×4 solve but isn't directly observable from C_eff
+// (which reports deflection).
 {
   const src = 'support(both)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) mid:load(1kgf)';
   const { structure } = parse(src);
@@ -263,22 +250,23 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
     console.log(`FAIL: expected 1 real load after adjust, got ${compliances.loadNodes.length}`);
     process.exit(1);
   }
+  // queryIx=0 is the clamp point (root end, hidden from public API but kept
+  // in compliance for the solve). All deflection there must vanish — perp by
+  // the fixed-fixed solve, chord because axial is not modeled. The entry is
+  // stripped from totalsMap as a zero matrix; absence == all zeros.
   const total = compliances.totals.find((t) => t.queryIx === 0 && t.loadIx === 0);
-  if (!total) { console.log('FAIL: no total[0][0]'); process.exit(1); }
-  const C = total.C;
-  console.log('C_eff[tip][p_mid] (row-major):');
-  console.log(`  [${C[0].toExponential(4)}, ${C[1].toExponential(4)}, ${C[2].toExponential(4)}]`);
-  console.log(`  [${C[3].toExponential(4)}, ${C[4].toExponential(4)}, ${C[5].toExponential(4)}]`);
-  console.log(`  [${C[6].toExponential(4)}, ${C[7].toExponential(4)}, ${C[8].toExponential(4)}]`);
-
-  const L = 100;
-  const E = MATERIALS.steel.E_MPa;
-  const A = 100;
-  // Chord = +X → perpendicular Y, Z must cancel exactly.
-  check('C_eff[tip][mid][y,y] = 0 (perp)', C[4], 0, 1e-12);
-  check('C_eff[tip][mid][z,z] = 0 (perp)', C[8], 0, 1e-12);
-  // Chord (X) is released → axial cantilever response remains.
-  check('C_eff[tip][mid][x,x] = L/(2·E·A)', C[0], L / (2 * E * A), 1e-12);
+  if (total) {
+    const C = total.C;
+    console.log('C_eff[clamp][p_mid] (row-major):');
+    console.log(`  [${C[0].toExponential(4)}, ${C[1].toExponential(4)}, ${C[2].toExponential(4)}]`);
+    console.log(`  [${C[3].toExponential(4)}, ${C[4].toExponential(4)}, ${C[5].toExponential(4)}]`);
+    console.log(`  [${C[6].toExponential(4)}, ${C[7].toExponential(4)}, ${C[8].toExponential(4)}]`);
+    for (let i = 0; i < 9; i++) {
+      check(`C_eff[clamp][mid][${i}] = 0`, C[i]!, 0, 1e-12);
+    }
+  } else {
+    console.log('ok   C_eff[clamp][p_mid] absent (entry stripped, equivalent to zero)');
+  }
 
   // Per-(beam, mode) decomposition: bendIx entry's [y,y] should still sum
   // with itself to 0 (only one beam). The presence of the entry confirms the

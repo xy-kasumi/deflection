@@ -52,12 +52,11 @@ export function renderReadout(el: HTMLElement, sim: SimResult, selectedNodeIx: n
       const row = document.createElement('div');
       row.className = 'ro-row';
       const left = document.createElement('span');
-      left.append(modeChip('ax',  b.axial_fraction));
       left.append(modeChip('bx',  b.bendIx_fraction));
       left.append(modeChip('by',  b.bendIy_fraction));
       left.append(modeChip('tor', b.torsion_fraction));
       const lbl = document.createElement('span');
-      lbl.textContent = `beam${b.beamIx}  ax ${formatPct(b.axial_fraction)}  bx ${formatPct(b.bendIx_fraction)}  by ${formatPct(b.bendIy_fraction)}  tor ${formatPct(b.torsion_fraction)}`;
+      lbl.textContent = `beam${b.beamIx}  bx ${formatPct(b.bendIx_fraction)}  by ${formatPct(b.bendIy_fraction)}  tor ${formatPct(b.torsion_fraction)}`;
       left.appendChild(lbl);
       const right = document.createElement('span');
       right.className = 'frac';

@@ -4,7 +4,7 @@ import type { Attachment, BeamDef, Param, Structure } from './parse';
 const KNOWN_ENVS = new Set(['support', 'mass_accel']);
 const ACCEL_UNITS = new Set(['G', 'm/s2']);
 const KNOWN_MATERIALS = new Set(['plastic', 'aluminum', 'steel']);
-const KNOWN_SHAPES = new Set(['rect', 'round', 'moment']);
+const KNOWN_SHAPES = new Set(['rect', 'round', 'section']);
 const KNOWN_ATTACHMENTS = new Set(['load']);
 
 // All semantic issues are warnings — the structure still walks/renders, just
@@ -146,7 +146,7 @@ function checkShapeArgs(name: string, params: Param[] | undefined, diags: Diagno
   const allowed: Record<string, Set<string>> = {
     rect: new Set(['W', 'H', 'T']),
     round: new Set(['D', 'T']),
-    moment: new Set(['I', 'Ix', 'Iy', 'J']),
+    section: new Set(['I', 'Ix', 'Iy', 'J', 'A']),
   };
   const set = allowed[name];
   if (!set) return;

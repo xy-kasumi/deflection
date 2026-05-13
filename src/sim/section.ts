@@ -1,8 +1,8 @@
 import type { BeamDef, Param } from '../dsl/parse';
 
-// Resolved section properties.  A = null means axial deformation is
-// suppressed for this beam (e.g. moment(...) sections, where area isn't
-// derivable from the inputs).
+// Resolved section properties. A = null means area was not derivable
+// (section(...) without an explicit A) — mass_accel body load is then
+// skipped for this beam.
 export interface Section {
   A_mm2: number | null;
   Ix_mm4: number;
@@ -25,9 +25,9 @@ export function resolveSection(beam: BeamDef): Section {
   const shape = findShape(beam.params);
   if (!shape) return DEFAULT_SECTION;
 
-  if (shape.name === 'rect')   return rectSection(shape.params ?? []);
-  if (shape.name === 'round')  return roundSection(shape.params ?? []);
-  if (shape.name === 'moment') return momentSection(shape.params ?? []);
+  if (shape.name === 'rect')    return rectSection(shape.params ?? []);
+  if (shape.name === 'round')   return roundSection(shape.params ?? []);
+  if (shape.name === 'section') return explicitSection(shape.params ?? []);
   return DEFAULT_SECTION;
 }
 
@@ -36,7 +36,7 @@ function findShape(params: Param[]): Extract<Param, { kind: 'ident' }> | null {
     if (
       p.kind === 'ident' &&
       p.params !== undefined &&
-      (p.name === 'rect' || p.name === 'round' || p.name === 'moment')
+      (p.name === 'rect' || p.name === 'round' || p.name === 'section')
     ) {
       return p;
     }
@@ -98,15 +98,17 @@ function roundSection(args: Param[]): Section {
   };
 }
 
-function momentSection(args: Param[]): Section {
+function explicitSection(args: Param[]): Section {
   const Ix = findQ(args, 'Ix');
   const Iy = findQ(args, 'Iy');
   const I  = findQ(args, 'I');
   const J  = findQ(args, 'J');
+  const A  = findQ(args, 'A');
   if (J === null) return DEFAULT_SECTION;
   const IxOut = Ix !== null ? Ix : (I !== null ? I : DEFAULT_SECTION.Ix_mm4);
   const IyOut = Iy !== null ? Iy : (I !== null ? I : DEFAULT_SECTION.Iy_mm4);
-  return { A_mm2: null, Ix_mm4: IxOut, Iy_mm4: IyOut, J_mm4: J };
+  const AOut = A !== null && A > 0 ? A : null;
+  return { A_mm2: AOut, Ix_mm4: IxOut, Iy_mm4: IyOut, J_mm4: J };
 }
 
 // Solid rectangle torsion constant (Roark, well-known approximation).

@@ -5,7 +5,7 @@ example
 ```
 support(both)
 mid:horz beam(aluminum rect(W30 H20 T2) L100) mid:load(0.5) end:load(0.5kgf)
-right beam(plastic moment(Ix1000 Iy1e6 J1000) L200) mid:load(0.3)
+right beam(plastic section(Ix1000 Iy1e6 J1000 A50) L200) mid:load(0.3)
 up beam(steel rect(W7 H5) L50) load(0.2)
 ```
 
@@ -45,7 +45,7 @@ UNIT
 ## Semantics
 * known `IDENT`:
     * material: `plastic`, `aluminum`, `steel`
-    * shape: `rect`, `round`, `moment`
+    * shape: `rect`, `round`, `section`
     * attachment: `load`
 * Default unit is "mm", "kgf", "mm4"
 * `horz` is ambiguous other than for the root beam

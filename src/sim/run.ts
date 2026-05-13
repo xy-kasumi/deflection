@@ -32,7 +32,6 @@ export interface SimLoad {
 export interface SimBeam {
   beamIx: number;
   total_fraction: number;
-  axial_fraction: number;
   bendIx_fraction: number;
   bendIy_fraction: number;
   torsion_fraction: number;
@@ -67,10 +66,10 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
   // recomputing — the cost is small (a few O(L·B·modes) matvecs per node).
   const nodes: NodeDeflectionResult[] = [];
   compliances.queryNodes.forEach((qn, queryIx) => {
-    // Hide the root beam's end under support(both): perpendicular deflection
-    // and rotation are zero by construction at the second clamp point, leaving
-    // only axial elongation — not useful as a deflection surface. The root
-    // beam's start is already excluded as the chain origin.
+    // Hide the root beam's end under support(both): it's the second clamp
+    // point — deflection is zero by construction (perpendicular components by
+    // the fixed-fixed solve, chord component because beams are axially rigid).
+    // The root beam's start is already excluded as the chain origin.
     if (supportKind === 'both' && qn.beamIx === 0 && qn.offset_mm === rootBeamLen) return;
     const beam = beams[qn.beamIx]!;
     const worldPos: Vec3 = [
@@ -99,7 +98,6 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
       beamAttribs = attr.perBeam.map((pb: PerBeamAttrib) => ({
         beamIx: pb.beamIx,
         total_fraction: pb.total_fraction,
-        axial_fraction: pb.axial_fraction,
         bendIx_fraction: pb.bendIx_fraction,
         bendIy_fraction: pb.bendIy_fraction,
         torsion_fraction: pb.torsion_fraction,

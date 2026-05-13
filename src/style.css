@@ -17,7 +17,6 @@
 
   /* Beam-mode swatches for the readout chips. Bend/torsion hues mirror
      scene/tokens.ts COLOR.{walkerHintCurrent, beamCurrent, deformed}. */
-  --mode-axial:   #6a737d;
   --mode-bend-x:  #2e7d32;
   --mode-bend-y:  #2563eb;
   --mode-torsion: #d97a1a;
@@ -110,7 +109,6 @@ html, body {
   margin-right: 6px;
   vertical-align: middle;
 }
-#info .ro-bar.ax  { background: var(--mode-axial); }
 #info .ro-bar.bx  { background: var(--mode-bend-x); }
 #info .ro-bar.by  { background: var(--mode-bend-y); }
 #info .ro-bar.tor { background: var(--mode-torsion); }

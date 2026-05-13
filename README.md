@@ -15,6 +15,13 @@ npm run dev                           # vite dev server
 npm run build                         # static bundle in dist/
 ```
 
+## Scope (what the tool does *not* model)
+
+Slender Euler-Bernoulli beams, bending + torsion only.
+Axial extension or buckling is not modeled.
+
+Means: No thin wire pulling, No ultra-fat (compared to length) beams
+
 ## Development
 
 See [`DSL.md`](DSL.md), [`vocab.md`](vocab.md).

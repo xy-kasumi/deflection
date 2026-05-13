@@ -22,7 +22,6 @@ export interface PerLoadAttrib {
 export interface PerBeamAttrib {
   beamIx: number;
   total_fraction: number;
-  axial_fraction: number;
   bendIx_fraction: number;
   bendIy_fraction: number;
   torsion_fraction: number;
@@ -66,7 +65,7 @@ export function attribute(c: Compliances, queryIx: number, d: Vec3): Attribution
   }));
 
   // Walk entries, accumulating per-beam, per-mode signed contributions.
-  type BeamSums = { total: number; axial: number; bendIx: number; bendIy: number; torsion: number; };
+  type BeamSums = { total: number; bendIx: number; bendIy: number; torsion: number; };
   const perBeamMap = new Map<number, BeamSums>();
   for (const e of c.entries) {
     if (e.queryIx !== queryIx) continue;
@@ -77,7 +76,7 @@ export function attribute(c: Compliances, queryIx: number, d: Vec3): Attribution
 
     let bs = perBeamMap.get(e.beamIx);
     if (!bs) {
-      bs = { total: 0, axial: 0, bendIx: 0, bendIy: 0, torsion: 0 };
+      bs = { total: 0, bendIx: 0, bendIy: 0, torsion: 0 };
       perBeamMap.set(e.beamIx, bs);
     }
     bs.total += signed;
@@ -89,7 +88,6 @@ export function attribute(c: Compliances, queryIx: number, d: Vec3): Attribution
     .map(([beamIx, bs]) => ({
       beamIx,
       total_fraction: bs.total * dInv,
-      axial_fraction: bs.axial * dInv,
       bendIx_fraction: bs.bendIx * dInv,
       bendIy_fraction: bs.bendIy * dInv,
       torsion_fraction: bs.torsion * dInv,
@@ -98,7 +96,7 @@ export function attribute(c: Compliances, queryIx: number, d: Vec3): Attribution
   return { delta_mm: delta, perLoad, perBeam };
 }
 
-function modeKey(m: Mode): 'axial' | 'bendIx' | 'bendIy' | 'torsion' {
+function modeKey(m: Mode): 'bendIx' | 'bendIy' | 'torsion' {
   return m;
 }
 
