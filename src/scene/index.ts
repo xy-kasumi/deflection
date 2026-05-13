@@ -4,6 +4,7 @@ import type { SimResult } from '../sim/run';
 import { COLOR, VU, MOTION } from './tokens';
 import { Labels } from './labels';
 import { LobeRenderer, computeLobeCeilWorld } from './lobe';
+import { buildChain } from './chain';
 
 const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
@@ -84,131 +85,26 @@ export class Scene {
 
     const focused = editor?.focused === true;
 
-    // Visual unit `u` = rod diameter (see vocab.md). Everything visible is
-    // expressed as `u × k`. Variables below are radii (Three.js geometry
-    // constructors take radii), so their numerical multipliers equal half
-    // the diameter ratio; each comment states the relationship in diameters,
-    // the directly-visible quantity. `avgL/40` is the only place avgL touches
-    // geometry; the floor keeps glyphs visible on degenerately short chains.
+    // Visual unit u = rod diameter; everything visible is expressed as u × k
+    // via the VU tokens. `avgL/40` is the only place avgL touches geometry;
+    // the floor keeps glyphs visible on degenerately short chains.
     const avgL = beams.reduce((s, b) => s + b.length_mm, 0) / beams.length;
     const u = Math.max(1, avgL / 40);
 
-    const rodR     = u * VU.rodR;
-    const jointR   = u * VU.jointR;
-    const attachR  = u * VU.attachR;
-    const clampHalf = u * VU.clampHalf;
-    const hitRadius = u * VU.hitR;
+    const hitRadius   = u * VU.hitR;
+    const labelOffset = u * VU.labelOffset;
+    const lobeFloor   = u * VU.lobeFloorR;
 
-    const walkerHintOffset = u * VU.walkerHintOffset;
-    const labelOffset      = u * VU.labelOffset;
+    const chain = buildChain(beams, {
+      supportKind,
+      focused,
+      currentBeamIx: editor?.currentBeamIx ?? null,
+      u,
+    });
+    for (const m of chain.meshes) this.content.add(m);
 
-    const lobeFloor = u * VU.lobeFloorR;
-
-    const jointGeom = new THREE.SphereGeometry(jointR, 12, 8);
-    const clampGeom = new THREE.BoxGeometry(clampHalf * 2, clampHalf * 2, clampHalf * 2);
-    const attachGeom = new THREE.SphereGeometry(attachR, 10, 6);
-    const jointMat = new THREE.MeshBasicMaterial({ color: COLOR.joint });
-    const clampMat = new THREE.MeshBasicMaterial({ color: COLOR.clamp });
-    const attachMat = new THREE.MeshBasicMaterial({ color: COLOR.attachment });
-
-    const bbox = new THREE.Box3();
-    bbox.makeEmpty();
-
-    for (let i = 0; i < beams.length; i++) {
-      const b = beams[i]!;
-      const start = new THREE.Vector3(...b.startFrame.origin);
-      const fwd = new THREE.Vector3(...b.startFrame.fwd);
-      const end = start.clone().add(fwd.clone().multiplyScalar(b.length_mm));
-      const isCurrent = focused && editor!.currentBeamIx === i;
-
-      // Capsule = cylinder + hemispherical end caps in one geometry. Trim the
-      // cylinder portion by 2r so the visual span (caps included) matches
-      // b.length_mm exactly. Local axis is +Y; rotate to align with beam +fwd.
-      const cylPart = Math.max(rodR * 0.01, b.length_mm - 2 * rodR);
-      const geom = new THREE.CapsuleGeometry(rodR, cylPart, 6, 16);
-      geom.translate(0, b.length_mm / 2, 0);
-      const beamMat = new THREE.MeshBasicMaterial({
-        color: isCurrent ? COLOR.beamCurrent : COLOR.beam,
-        transparent: true,
-        opacity: 0.32,
-        depthWrite: false,
-      });
-      const mesh = new THREE.Mesh(geom, beamMat);
-      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), fwd);
-      mesh.position.copy(start);
-      this.content.add(mesh);
-
-      // Structural decorations (joints, loads, walker hints) only in editing mode.
-      // Inspection mode keeps just the beam skeleton + clamps + deflection visuals.
-      if (focused) {
-        // Non-root beams: sphere at the parent-attachment point (this beam's start).
-        if (i > 0) {
-          const joint = new THREE.Mesh(jointGeom, jointMat);
-          joint.position.copy(start);
-          this.content.add(joint);
-        }
-
-        // Walker hint: sphere offset along walker-up at the beam's start with a
-        // faint foot dropping orthogonally to the centerline. Surfaces the
-        // section-frame orientation. Green on the editor's current beam.
-        const hintColor = isCurrent ? COLOR.walkerHintCurrent : COLOR.beam;
-        const upVec = new THREE.Vector3(...b.startFrame.up);
-        const fwdOffset = b.length_mm * 0.08;
-        const walkerHintGeom = new THREE.SphereGeometry(attachR * 0.9, 10, 6);
-        const walkerHint = new THREE.Mesh(
-          walkerHintGeom,
-          new THREE.MeshBasicMaterial({ color: hintColor }),
-        );
-        walkerHint.position
-          .copy(start)
-          .add(fwd.clone().multiplyScalar(fwdOffset))
-          .add(upVec.clone().multiplyScalar(walkerHintOffset));
-        this.content.add(walkerHint);
-
-        const footAnchor = start.clone().add(fwd.clone().multiplyScalar(fwdOffset));
-        const footGeom = new THREE.BufferGeometry().setFromPoints([
-          footAnchor,
-          walkerHint.position.clone(),
-        ]);
-        const footMat = new THREE.LineBasicMaterial({
-          color: hintColor,
-          transparent: true,
-          opacity: 0.35,
-          depthWrite: false,
-        });
-        this.content.add(new THREE.Line(footGeom, footMat));
-
-        // Attachment markers along the beam axis (load locations).
-        for (const att of b.attachmentOffsets) {
-          const pos = start.clone().add(fwd.clone().multiplyScalar(att.local_mm));
-          const dot = new THREE.Mesh(attachGeom, attachMat);
-          dot.position.copy(pos);
-          this.content.add(dot);
-        }
-      }
-
-      bbox.expandByPoint(start);
-      bbox.expandByPoint(end);
-    }
-
-    // Clamp markers on the root beam: start always; end under support(both).
-    // These stay visible in both modes — they denote the world-origin reference.
-    if (supportKind) {
-      const root = beams[0]!;
-      const rStart = new THREE.Vector3(...root.startFrame.origin);
-      const rFwd = new THREE.Vector3(...root.startFrame.fwd);
-      const startClamp = new THREE.Mesh(clampGeom, clampMat);
-      startClamp.position.copy(rStart);
-      this.content.add(startClamp);
-      if (supportKind === 'both') {
-        const endClamp = new THREE.Mesh(clampGeom, clampMat);
-        endClamp.position.copy(rStart).add(rFwd.multiplyScalar(root.length_mm));
-        this.content.add(endClamp);
-      }
-    }
-
-    bbox.getCenter(this.center);
-    const size = bbox.getSize(new THREE.Vector3());
+    chain.bbox.getCenter(this.center);
+    const size = chain.bbox.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
     this.scaleHalf = Math.max(50, maxDim * 0.8 + Math.max(u * 6, 10));
 
