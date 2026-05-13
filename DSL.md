@@ -11,31 +11,31 @@ up beam(steel rect(W7 H5) L50) force(0.2)
 
 EBNF
 ```
-  (* Parser *)
-  lang = { env-def | beam-def } (* each line cannot contain more than one defs *)
-  
-  env-def = IDENT paramlist
-  beam-def = [ loc-spec ] KW_DIR KW_BEAM [ paramlist ] { attachment }
-  attachment = [ loc-spec ] IDENT paramlist
-  loc-spec = ( KW_LOC | QUANTITY ) LOC-SEP
-  
-  paramlist = LP { param } RP
-  param = QUANTITY | IDENT [ paramlist ]
-  
-  (* Lexer; lexer ignores whitespaces; tokens must be separated by
-   separator LP|RP|LOC-SEP or whitespace *)
-  LP = "("
-  RP = ")"
-  LOC-SEP = ":"
-  
-  KW_BEAM = "beam"
-  KW_DIR = "horz" | "right" | "left" | "up" | "down"
-  KW_LOC = "end" | "mid"
-  IDENT = /[a-z]+/ (* that is not any of BEAM/DIR/LOC *)
-  QUANTITY = [ PREFIX ] NUMBER [ UNIT ] (* no space in-between *)
-  PREFIX = /[A-Z][A-Za-z]*/
-  NUMBER = (* floating point number *)
-  UNIT = "N" | "kgf" | "mm4" | "N/mm" | ...
+(* Parser *)
+lang = { env-def | beam-def } (* each line cannot contain more than one defs *)
+
+env-def = IDENT paramlist
+beam-def = [ loc-spec ] KW_DIR KW_BEAM [ paramlist ] { attachment }
+attachment = [ loc-spec ] IDENT paramlist
+loc-spec = ( KW_LOC | QUANTITY ) LOC-SEP
+
+paramlist = LP { param } RP
+param = QUANTITY | IDENT [ paramlist ]
+
+(* Lexer; lexer ignores whitespaces; tokens must be separated by
+  separator LP|RP|LOC-SEP or whitespace *)
+LP = "("
+RP = ")"
+LOC-SEP = ":"
+
+KW_BEAM = "beam"
+KW_DIR = "horz" | "right" | "left" | "up" | "down"
+KW_LOC = "end" | "mid"
+IDENT = /[a-z]+/ (* that is not any of BEAM/DIR/LOC *)
+QUANTITY = [ PREFIX ] NUMBER [ UNIT ] (* no space in-between *)
+PREFIX = /[A-Z][A-Za-z]*/
+NUMBER = (* floating point number *)
+UNIT = "N" | "kgf" | "mm4" | "N/mm" | ...
 ```
 
 semantics
