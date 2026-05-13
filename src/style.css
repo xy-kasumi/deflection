@@ -192,9 +192,11 @@ html, body {
   font: 11px/1 ui-monospace, "SF Mono", Menlo, monospace;
   color: #5a5a5a;
   background: rgba(255, 255, 255, 0.78);
-  padding: 1px 5px;
+  padding: 2px 6px;
   border-radius: 3px;
   white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .scene-label.selected {

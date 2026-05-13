@@ -106,23 +106,26 @@ export class Scene {
 
     const focused = editor?.focused === true;
 
-    // Visual unit `u` — the rod radius. Everything else is `u × k` where k
-    // states the visual relationship (joint is 2u → twice as fat as the rod,
-    // walker-hint sits 10u away, etc.). `avgL/80` is the only place avgL
-    // touches geometry; the floor keeps glyphs visible on degenerately short
-    // chains. Change `u` and the whole scene scales together coherently.
+    // Visual unit `u` = rod diameter (see vocab.md). Everything visible is
+    // expressed as `u × k`. Variables below are radii (Three.js geometry
+    // constructors take radii), so their numerical multipliers equal half
+    // the diameter ratio; each comment states the relationship in diameters,
+    // the directly-visible quantity. `avgL/40` is the only place avgL touches
+    // geometry; the floor keeps glyphs visible on degenerately short chains.
     const avgL = beams.reduce((s, b) => s + b.length_mm, 0) / beams.length;
-    const u = Math.max(0.5, avgL / 80);
+    const u = Math.max(1, avgL / 40);
 
-    const rodR    = u;
-    const jointR  = u * 2;        // sticks out distinctly from the rod
-    const attachR = u * 1.5;      // smaller marker for loads
-    const clampHalf = u * 2.2;    // box just wider than the joint sphere
-    const walkerHintOffset = u * 10;
-    const labelOffset      = u * 10;
-    const hitRadius        = u * 2;   // joint-sized click target
-    const lobeFloor = u * 1.5;        // underflow sphere just edges past the rod
-    const lobeCeil  = u * 14;         // konpeito stays well under one beam length (80u)
+    const rodR    = u / 2;          // rod dia = 1u
+    const jointR  = u;              // joint dia = 2u — twice as fat as the rod
+    const attachR = u * 0.75;       // attach dia = 1.5u — smaller marker for loads
+    const clampHalf = u * 1.1;      // clamp side = 2.2u — just wider than the joint
+    const hitRadius = u * 3;        // hit dia = 6u — generous, also reaches the label
+
+    const walkerHintOffset = u * 5; // 5u off the rod
+    const labelOffset      = u * 5;
+
+    const lobeFloor = u * 0.75;     // underflow dia = 1.5u — just edges past the rod
+    const lobeCeil  = u * 7;        // overflow base dia = 14u — well under one beam length (40u)
 
     const jointGeom = new THREE.SphereGeometry(jointR, 12, 8);
     const clampGeom = new THREE.BoxGeometry(clampHalf * 2, clampHalf * 2, clampHalf * 2);
@@ -293,11 +296,14 @@ export class Scene {
 
       // Floating δ label, offset along the beam's walker-up so the label sits
       // off the lobe instead of behind it. Hidden when editor has focus.
+      // Clicking the label picks the same node as clicking the lobe.
       const labelEl = document.createElement('div');
       labelEl.className = 'scene-label';
       if (focused) labelEl.classList.add('hidden');
       if (isSel) labelEl.classList.add('selected');
       labelEl.textContent = `δ ${formatMm(n.delta_max_mm)}`;
+      const pickIx = ix;
+      labelEl.addEventListener('click', () => this.onPick(pickIx));
       this.labelLayer.appendChild(labelEl);
       const up = new THREE.Vector3(...beams[n.beamIx]!.startFrame.up);
       const labelPos = worldPos.clone().add(up.multiplyScalar(labelOffset));

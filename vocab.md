@@ -10,3 +10,4 @@ Names for concepts that span code, UI, and conversation. If new behavior doesn't
 - **tip** — point on a chain which is natural "end" of the chain. Usually end of last beam; exception: mid of root beam when there's only one beam and `support(both)`.
 - **directional** — scalar defined over unit sphere surface. used for representing deflection.
 - **current beam** — the beam-def the editor cursor is in.
+- **visual unit** — basis of 3D view object sizing where 1u is still visible. 1u = rod diameter.
