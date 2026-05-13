@@ -23,17 +23,17 @@ export function renderReadout(el: HTMLElement, sim: SimResult, selectedNodeIx: n
   headline.textContent = `${tag} δ ≈ ${formatMm(sel.delta_max_mm)}`;
   el.appendChild(headline);
 
-  // Forces section.
-  if (sel.forces.length > 0) {
+  // Loads section.
+  if (sel.loads.length > 0) {
     const hdr = document.createElement('div');
     hdr.className = 'ro-section';
-    hdr.textContent = 'Forces:';
+    hdr.textContent = 'Loads:';
     el.appendChild(hdr);
-    for (const f of sel.forces) {
+    for (const f of sel.loads) {
       const row = document.createElement('div');
       row.className = 'ro-row';
       const left = document.createElement('span');
-      left.textContent = `beam${f.beamIx} @${formatMm(f.offset_mm)} · ${formatForce(f.Fmax_N)} → ${formatMm(f.delta_mm)}`;
+      left.textContent = `beam${f.beamIx} @${formatMm(f.offset_mm)} · ${formatLoad(f.Fmax_N)} → ${formatMm(f.delta_mm)}`;
       const right = document.createElement('span');
       right.className = 'frac';
       right.textContent = formatPct(f.fraction);
@@ -89,7 +89,7 @@ export function formatMm(v: number): string {
     : `${rounded} mm`;
 }
 
-function formatForce(N: number): string {
+function formatLoad(N: number): string {
   const kgf = N / KGF_TO_N;
   if (kgf >= 1) return `${kgf.toFixed(2)} kgf`;
   return `${(N).toFixed(2)} N`;

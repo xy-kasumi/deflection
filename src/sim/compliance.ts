@@ -31,7 +31,7 @@ export interface ComplianceEntry {
   loadIx: number;
   beamIx: number;
   mode: Mode;
-  // displacement_at_query (world) ← generalized_force_at_load (world).
+  // deflection_at_query (world) ← generalized_force_at_load (world).
   // The columns of C are interpreted per the load's `kind`: a 'force' load
   // means each column is the response to a unit world force in that axis;
   // a 'moment' load means each column is the response to a unit world moment.
@@ -79,23 +79,23 @@ export function buildCompliances(
     queryNodes.push(tipLoc);
   }
 
-  // Load nodes: one per force attachment (in chain order).
+  // Load nodes: one per load attachment (in chain order).
   const loadNodes: LoadNode[] = [];
   const loadFmax_N: number[] = [];
   for (let i = 0; i < beams.length; i++) {
     const b = beams[i] as BeamNode;
     for (const att of b.attachmentOffsets) {
-      if (att.def.name !== 'force') continue;
-      const F = forceMagnitudeN(att.def);
+      if (att.def.name !== 'load') continue;
+      const F = loadMagnitudeN(att.def);
       if (F <= 0) continue;
       loadNodes.push({ beamIx: i, offset_mm: att.local_mm, kind: 'force' });
       loadFmax_N.push(F);
     }
   }
 
-  // Mass-acceleration body force: `mass_accel(a)` (default 1G) adds one
-  // direction-free `mid:force(mass·a)` per beam. The directional optimization
-  // already maximizes over direction per load, so the body force aggregates
+  // Mass-acceleration body load: `mass_accel(a)` (default 1G) adds one
+  // direction-free `mid:load(mass·a)` per beam. The directional optimization
+  // already maximizes over direction per load, so the body load aggregates
   // the worst-case of gravity / inertial acceleration / vibration without
   // committing to a global "down" axis.
   const accel_m_s2 = getMassAccel_m_s2(structure);
@@ -141,7 +141,7 @@ export function buildCompliances(
   const totalsMap = new Map<string, Mat3>();
 
   // For fixed-fixed: rotation compliance at the *root beam's end* per load,
-  // computed alongside displacement compliance in the same sweep. World-frame
+  // computed alongside deflection compliance in the same sweep. World-frame
   // 3×3, columns indexed by world axis of the unit input (force or moment).
   const rootEndOffset = beams.length > 0 ? beams[0]!.length_mm : 0;
   const clampQueryIx = fixedFixed
@@ -320,7 +320,7 @@ export function buildCompliances(
 // avoids fighting torsion that no real bolt-on support enforces.
 //
 // Compatibility: the chord-perpendicular components of the clamp point's
-// displacement and rotation must both vanish. In (u, v) basis, four scalar
+// deflection and rotation must both vanish. In (u, v) basis, four scalar
 // equations:
 //
 //   u·δ_ext + (u·C_FF·u)R_u + (u·C_FF·v)R_v + (u·C_FM·u)M_u + (u·C_FM·v)M_v = 0
@@ -329,8 +329,8 @@ export function buildCompliances(
 //   v·θ_ext + ...                                                              = 0
 //
 // where (3×3 self-compliance at the clamp point):
-//   C_FF = clamp-displacement ← clamp-force,  totalsMap[q_clamp][clamp_force_load]
-//   C_FM = clamp-displacement ← clamp-moment, totalsMap[q_clamp][clamp_moment_load]
+//   C_FF = clamp-deflection ← clamp-force,  totalsMap[q_clamp][clamp_force_load]
+//   C_FM = clamp-deflection ← clamp-moment, totalsMap[q_clamp][clamp_moment_load]
 //   C_θF = clamp-rotation     ← clamp-force,  clampRot[clamp_force_load]
 //   C_θM = clamp-rotation     ← clamp-moment, clampRot[clamp_moment_load]
 //
@@ -390,7 +390,7 @@ function applyFixedFixed(
   A[12] = quad(v, K_FF, u); A[13] = quad(v, K_FF, v); A[14] = quad(v, K_FM, u); A[15] = quad(v, K_FM, v);
 
   // For each real load p, solve A·X = B where B is the 4×3 negated cantilever
-  // response (chord-perp components of clamp-point displacement and rotation),
+  // response (chord-perp components of clamp-point deflection and rotation),
   // then project X back to world to get R_world[p] and M_world[p] (3×3 each).
   const realLoadCount = loadNodes.length - 2; // last two are synthetic
   const R_world: Mat3[] = [];
@@ -624,7 +624,7 @@ function modeAxial(F: Vec3, s_load: number, s_eval: number, E_MPa: number, A_mm2
 
 function modeTorsion(M: Vec3, s_load: number, s_eval: number, G_MPa: number, J_mm4: number): ModeOut {
   if (J_mm4 <= 0 || G_MPa <= 0) return ZERO;
-  // θ_z(s) = M_z · min(s, s_load) / (G·J). No displacement at s_eval from
+  // θ_z(s) = M_z · min(s, s_load) / (G·J). No deflection at s_eval from
   // torsion alone (rotation propagates as transport for downstream points).
   const theta_z = M[2] * Math.min(s_eval, s_load) / (G_MPa * J_mm4);
   return { defl: [0, 0, 0], rot: [0, 0, theta_z] };
@@ -673,7 +673,7 @@ function modeBendIy(F: Vec3, M: Vec3, s_load: number, s_eval: number, E_MPa: num
 // ---------- world transport ----------
 
 function worldContribution(R: Mat3, mode: ModeOut, arm_world: Vec3): Vec3 {
-  // world displacement at the query = R·defl_local + (R·rot_local) × arm.
+  // world deflection at the query = R·defl_local + (R·rot_local) × arm.
   const dW = matVec(R, mode.defl);
   const rotW = matVec(R, mode.rot);
   const transport = crossV(rotW, arm_world);
@@ -686,7 +686,7 @@ function isKnownMaterial(s: string | undefined): boolean {
   return s === 'plastic' || s === 'aluminum' || s === 'steel';
 }
 
-function forceMagnitudeN(att: Attachment): number {
+function loadMagnitudeN(att: Attachment): number {
   if (att.params.length !== 1) return 0;
   const p = att.params[0]!;
   if (p.kind !== 'quantity') return 0;

@@ -12,12 +12,51 @@ const COLOR_JOINT = 0x444b53;
 const COLOR_CLAMP = 0x444b53;
 const COLOR_ATTACHMENT = 0xd97a1a;
 const COLOR_WALKER_HINT_HIGHLIGHT = 0x2e7d32;
-const COLOR_DEFORMED = 0xd97a1a;          // orange — deflection family (lobe + underflow)
-const COLOR_DEFORMED_OVERFLOW = 0xc62828; // red — clipped magnitude
-const COLOR_HEADLINE_ARROW = 0xd62828;
+const COLOR_DEFORMED = 0xd97a1a;          // orange — deflection family (shell + underflow)
+const COLOR_DEFORMED_PEAK = 0xc62828;     // red — peak cap on the normal lobe + overflow
 
 const COLOR_BEAM = 0x9aa0a6;
 const COLOR_BEAM_HIGHLIGHT = 0x2563eb;
+
+// Normal-lobe rendering. Filled mesh with per-vertex t = δ/δ_max. The fragment
+// shader paints a faint orange shell below t = CAP_LO and an opaque red cap
+// above — the cap is a "point" on a sharp peak, a "band" on a ridge, the whole
+// surface on a true sphere. fwidth-AA keeps the cap edge pixel-clean
+// regardless of mesh density or lobe orientation.
+const LOBE_CAP_LO = 0.975;
+const LOBE_SHELL_ALPHA = 0.22;
+// Sphere-detection: if more than this fraction of vertices sit inside the cap,
+// the painted lobe would say nothing (whole surface red). Degrade to plain
+// translucent shell instead — same look as the underflow sphere, full size.
+const LOBE_SPHERE_FRACTION = 0.5;
+// Icosphere subdivision. (detail+1)² sub-triangles per base face → 20·(detail+1)²
+// triangles total. detail=20 → ~3.5° vertex spacing, smooth cap boundary.
+const LOBE_DETAIL = 20;
+
+const LOBE_VS = `
+attribute float tNorm;
+varying float vT;
+void main() {
+  vT = tNorm;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const LOBE_FS = `
+precision highp float;
+uniform float alphaMul;
+varying float vT;
+void main() {
+  float t = clamp(vT, 0.0, 1.0);
+  float wT = fwidth(t);
+  float capAlpha = smoothstep(${LOBE_CAP_LO} - wT, ${LOBE_CAP_LO} + wT, t);
+  vec3 shellCol = vec3(0.85, 0.48, 0.10);
+  vec3 capCol   = vec3(0.78, 0.16, 0.16);
+  vec3 col = mix(shellCol, capCol, capAlpha);
+  float a = mix(${LOBE_SHELL_ALPHA}, 1.0, capAlpha) * alphaMul;
+  gl_FragColor = vec4(col, a);
+}
+`;
 
 // Click vs drag: pointerup with movement below this threshold (squared, px) is a click.
 const CLICK_MOVE_THRESH_SQ = 16;
@@ -236,7 +275,7 @@ export class Scene {
     this.scaleHalf = Math.max(50, maxDim * 0.8 + Math.max(u * 6, 10));
 
     if (sim && sim.nodes.length > 0) {
-      this.drawDeflection(beams, sim, maxDim, hitRadius, labelOffset, lobeFloor, lobeCeil, selectedNodeIx, focused);
+      this.drawDeflection(beams, sim, hitRadius, labelOffset, lobeFloor, lobeCeil, selectedNodeIx, focused);
     }
 
     this.refresh();
@@ -245,7 +284,6 @@ export class Scene {
   private drawDeflection(
     beams: BeamNode[],
     sim: SimResult,
-    maxDim: number,
     hitRadius: number,
     labelOffset: number,
     lobeFloor: number,
@@ -310,23 +348,6 @@ export class Scene {
       this.labelEntries.push({ el: labelEl, worldPos: labelPos });
     }
 
-    // Headline arrow at the selected node — only when not editing.
-    const sel = sim.nodes[selectedNodeIx];
-    if (!focused && sel && sel.delta_max_mm > 0) {
-      const len = sel.delta_max_mm * sim.display_scale;
-      if (len > 1e-6) {
-        const d = new THREE.Vector3(...sel.d_star);
-        const arrow = new THREE.ArrowHelper(
-          d.clone().normalize(),
-          new THREE.Vector3(...sel.worldPos_undeformed),
-          len,
-          COLOR_HEADLINE_ARROW,
-          Math.min(len * 0.4, maxDim * 0.05),
-          Math.min(len * 0.25, maxDim * 0.03),
-        );
-        this.content.add(arrow);
-      }
-    }
   }
 
   private clearLabels() {
@@ -508,28 +529,61 @@ function disposeChildren(group: THREE.Group) {
   group.clear();
 }
 
-// Wireframe icosphere whose vertices are deformed radially by δ(d) · scale.
-// One mesh per query node visualizes how compliant the joint is in every
-// direction: anisotropic chains produce elongated lobes along their weak axes.
+// Filled icosphere deformed radially by δ(d) · scale, painted by the lobe
+// shader (faint orange shell + opaque red cap on δ/δ_max ≥ LOBE_CAP_LO). The
+// cap topology emerges from the data — point on a sharp peak, band on a
+// ridge, whole surface on an isotropic lobe.
+//
+// Truly isotropic lobes would paint as a uniformly red surface, which says
+// nothing; we detect that case (most vertices already in the cap region) and
+// degrade to a plain translucent shell — same look as the underflow sphere,
+// just at the lobe's natural size.
 function buildNormalLobe(dir: Directional, scale: number, opacity: number): THREE.Mesh {
-  const geom = new THREE.IcosahedronGeometry(1, 3);
+  const geom = new THREE.IcosahedronGeometry(1, LOBE_DETAIL);
   const pos = geom.attributes.position!;
+  const dvals = new Float32Array(pos.count);
+  let dMax = 0;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const y = pos.getY(i);
     const z = pos.getZ(i);
     const len = Math.hypot(x, y, z) || 1;
     const nx = x / len, ny = y / len, nz = z / len;
-    const r = dir.at([nx, ny, nz]) * scale;
-    pos.setXYZ(i, nx * r, ny * r, nz * r);
+    const d = dir.at([nx, ny, nz]);
+    dvals[i] = d;
+    if (d > dMax) dMax = d;
+    pos.setXYZ(i, nx * d * scale, ny * d * scale, nz * d * scale);
   }
   pos.needsUpdate = true;
   geom.computeBoundingSphere();
-  const mat = new THREE.MeshBasicMaterial({
-    color: COLOR_DEFORMED,
-    wireframe: true,
+
+  const tNorm = new Float32Array(pos.count);
+  let capCount = 0;
+  for (let i = 0; i < pos.count; i++) {
+    const t = dMax > 0 ? dvals[i]! / dMax : 0;
+    tNorm[i] = t;
+    if (t >= LOBE_CAP_LO) capCount++;
+  }
+
+  if (capCount / pos.count > LOBE_SPHERE_FRACTION) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: COLOR_DEFORMED,
+      transparent: true,
+      opacity: LOBE_SHELL_ALPHA * opacity,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    return new THREE.Mesh(geom, mat);
+  }
+
+  geom.setAttribute('tNorm', new THREE.BufferAttribute(tNorm, 1));
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { alphaMul: { value: opacity } },
+    vertexShader: LOBE_VS,
+    fragmentShader: LOBE_FS,
     transparent: true,
-    opacity,
+    side: THREE.DoubleSide,
+    depthWrite: false,
   });
   return new THREE.Mesh(geom, mat);
 }
@@ -566,7 +620,7 @@ function buildKonpeito(ceil: number, opacity: number): THREE.Mesh {
   geom.computeVertexNormals();
   geom.computeBoundingSphere();
   const mat = new THREE.MeshBasicMaterial({
-    color: COLOR_DEFORMED_OVERFLOW,
+    color: COLOR_DEFORMED_PEAK,
     transparent: true,
     opacity,
     depthWrite: false,

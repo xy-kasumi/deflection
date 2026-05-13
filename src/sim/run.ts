@@ -16,11 +16,11 @@ export interface NodeDeflectionResult {
   d_star: Vec3;
   delta_max_mm: number;
   directional: Directional;
-  forces: SimForce[];
+  loads: SimLoad[];
   beams: SimBeam[];
 }
 
-export interface SimForce {
+export interface SimLoad {
   loadIx: number;
   beamIx: number;
   offset_mm: number;
@@ -70,7 +70,7 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
   // recomputing — the cost is small (a few O(L·B·modes) matvecs per node).
   const nodes: NodeDeflectionResult[] = [];
   compliances.queryNodes.forEach((qn, queryIx) => {
-    // Hide the root beam's end under support(both): perpendicular displacement
+    // Hide the root beam's end under support(both): perpendicular deflection
     // and rotation are zero by construction at the second clamp point, leaving
     // only axial elongation — not useful as a deflection surface. The root
     // beam's start is already excluded as the chain origin.
@@ -84,11 +84,11 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
     const dir = directionalFor(compliances, queryIx);
     const { d, value } = dir.max();
 
-    let forces: SimForce[] = [];
+    let loads: SimLoad[] = [];
     let beamAttribs: SimBeam[] = [];
     if (value > 0 && compliances.loadNodes.length > 0) {
       const attr = attribute(compliances, queryIx, d);
-      forces = attr.perLoad.map((pl: PerLoadAttrib) => {
+      loads = attr.perLoad.map((pl: PerLoadAttrib) => {
         const ln = compliances.loadNodes[pl.loadIx]!;
         return {
           loadIx: pl.loadIx,
@@ -117,7 +117,7 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
       d_star: d,
       delta_max_mm: value,
       directional: dir,
-      forces,
+      loads,
       beams: beamAttribs,
     });
   });

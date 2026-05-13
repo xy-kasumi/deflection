@@ -5,7 +5,7 @@ const KNOWN_ENVS = new Set(['support', 'mass_accel']);
 const ACCEL_UNITS = new Set(['G', 'm/s2']);
 const KNOWN_MATERIALS = new Set(['plastic', 'aluminum', 'steel']);
 const KNOWN_SHAPES = new Set(['rect', 'round', 'moment']);
-const KNOWN_ATTACHMENTS = new Set(['force']);
+const KNOWN_ATTACHMENTS = new Set(['load']);
 
 // All semantic issues are warnings — the structure still walks/renders, just
 // with sensible fallbacks. Hard syntax errors are emitted at parse time.
@@ -228,11 +228,11 @@ function checkAttachment(a: Attachment, diags: Diagnostic[]) {
     });
     return;
   }
-  if (a.name === 'force') {
+  if (a.name === 'load') {
     if (a.params.length !== 1) {
       diags.push({
         severity: 'warning',
-        message: 'force(...) takes exactly one magnitude',
+        message: 'load(...) takes exactly one magnitude',
         span: a.span,
       });
       return;
@@ -241,7 +241,7 @@ function checkAttachment(a: Attachment, diags: Diagnostic[]) {
     if (p.kind !== 'quantity') {
       diags.push({
         severity: 'warning',
-        message: 'force(...) magnitude must be a number',
+        message: 'load(...) magnitude must be a number',
         span: p.span,
       });
       return;
@@ -249,14 +249,14 @@ function checkAttachment(a: Attachment, diags: Diagnostic[]) {
     if (p.quantity.prefix) {
       diags.push({
         severity: 'warning',
-        message: `unexpected prefix '${p.quantity.prefix}' on force magnitude`,
+        message: `unexpected prefix '${p.quantity.prefix}' on load magnitude`,
         span: p.span,
       });
     }
     if (p.quantity.unit && p.quantity.unit !== 'kgf' && p.quantity.unit !== 'N') {
       diags.push({
         severity: 'warning',
-        message: `unknown unit '${p.quantity.unit}' on force (expected kgf or N)`,
+        message: `unknown unit '${p.quantity.unit}' on load (expected kgf or N)`,
         span: p.span,
       });
     }

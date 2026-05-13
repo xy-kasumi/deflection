@@ -18,14 +18,14 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   if (!ok) process.exitCode = 1;
 }
 
-// Test 1: horz cantilever, steel rect(W10 H10) L100, end:force(1kgf).
+// Test 1: horz cantilever, steel rect(W10 H10) L100, end:load(1kgf).
 // Horz root: F=+X, R=-Z, U=+Y. So beam axis is world +X, walker-up is world +Y.
 // Tip is at (100, 0, 0). Tip force = 1 kgf = 9.80665 N.
 // 1 kgf is a magnitude — the load contributes |C·F_dir|. We use C_tot directly
 // (compliance, not the F-weighted result) and check (1,1) entry:
 //   u_y / F_y = L³ / (3·E·Ix)
 {
-  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:load(1kgf)';
   const { structure, diagnostics: pd } = parse(src);
   if (pd.some((d) => d.severity === 'error')) {
     console.log('parse diagnostics:', pd);
@@ -42,7 +42,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
     process.exit(1);
   }
 
-  console.log('-- Test 1: horz steel rect(W10 H10) L100, force at tip --');
+  console.log('-- Test 1: horz steel rect(W10 H10) L100, load at tip --');
   console.log('queryNodes:', compliances.queryNodes);
   console.log('loadNodes:', compliances.loadNodes, 'F:', compliances.loadFmax_N);
   console.log('totals entries:', compliances.totals.length);
@@ -105,14 +105,14 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 }
 
 // Test 2: two-beam chain. horz L100 then up L100, both steel rect(W10 H10),
-// force(1kgf) at the tip (end of beam1). Verifies cross-beam transport.
+// load(1kgf) at the tip (end of beam1). Verifies cross-beam transport.
 //
 // Beam0 lies along world +X from (0,0,0) to (100,0,0). At its tip the walker
 // turns 'up', so beam1's start = (100,0,0). For 'up' turn from horz frame
 // (F=+X, R=-Z, U=+Y): new F = old U = +Y, new R = old R = -Z, new U = -F = -X.
 // Beam1 lies from (100,0,0) to (100,100,0). Tip = (100,100,0).
 //
-// We'll check the tip Y-displacement under F_y = 1kgf (vertical load at tip).
+// We'll check the tip Y-deflection under F_y = 1kgf (vertical load at tip).
 // Beam0 carries this as bending in the +Y direction with the lever-arm-extended
 // load: tip is at (100,100,0), so moment on beam0 about its tip about world-Z
 // from F_y = 1kgf at (100,100,0): arm_to_load = (0,100,0); cross with (0,F_y,0) = 0.
@@ -123,12 +123,12 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 // contributes bend-Ix Y-deflection L³/(3·E·Ix), and beam1 contributes axial
 // L/(E·A) → tip total u_y = L³/(3·E·Ix) + L/(E·A).
 {
-  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100)\nup beam(steel rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100)\nup beam(steel rect(W10 H10) L100) end:load(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);
 
-  console.log('\n-- Test 2: horz→up two-beam chain, force at tip --');
+  console.log('\n-- Test 2: horz→up two-beam chain, load at tip --');
   const tipQuery = compliances.queryNodes.length - 1;
   const lastLoad = compliances.loadNodes.length - 1;
   console.log('tip query frame: beam', compliances.queryNodes[tipQuery]);
@@ -171,14 +171,14 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   console.log(`  expected u_y/F_y = ${exp_uy.toExponential(4)}`);
 }
 
-// Test 3: Directional on single-beam horz cantilever, force at tip 1kgf.
+// Test 3: Directional on single-beam horz cantilever, load at tip 1kgf.
 // δ(d) = F · |C_tot^T · d|. C_tot is diagonal [L/EA, L³/3EIx, L³/3EIy] (with
 // 2 equal eigenvalues in Y,Z and a tiny one in X). Max is along the largest
 // singular value direction: σ_max = max(L/EA, L³/3EIx, L³/3EIy). With W=H
 // these are 2e-3 (×2) and 5e-6 (×1) — so δ_max = F·L³/(3·E·Ix) and d* should
 // be in the Y-Z plane (any direction there gives the same value).
 {
-  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:load(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);
@@ -219,7 +219,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 //   - 1 load, fraction 1.0
 //   - 1 beam, total 1.0; bendIx_fraction = 1.0, others 0.
 {
-  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:load(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);
@@ -241,20 +241,20 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   }
 }
 
-// Test 5: support(both), single horz beam steel rect(W10 H10) L100, force at
-// midpoint. Fixed-fixed: chord = +X, perp plane = YZ. Tip Y/Z displacement
+// Test 5: support(both), single horz beam steel rect(W10 H10) L100, load at
+// midpoint. Fixed-fixed: chord = +X, perp plane = YZ. Tip Y/Z deflection
 // must be zero (clamped); tip rotation about Y/Z must also be zero. Chord
 // (axial X) is the one remaining free DOF and matches cantilever axial.
-// We verify the perp tip displacement cells go to zero post-adjust; the
+// We verify the perp tip deflection cells go to zero post-adjust; the
 // rotation constraint is enforced inside the 4×4 solve but isn't directly
-// observable from C_eff (which reports displacement).
+// observable from C_eff (which reports deflection).
 {
-  const src = 'support(both)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) mid:force(1kgf)';
+  const src = 'support(both)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) mid:load(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances, diagnostics: cd } = buildCompliances(beams, structure);
 
-  console.log('\n-- Test 5: support(both) horz cantilever, force at midpoint --');
+  console.log('\n-- Test 5: support(both) horz cantilever, load at midpoint --');
   if (cd.some((d) => d.severity === 'error')) {
     console.log('FAIL: compliance diagnostics:', cd);
     process.exit(1);
@@ -300,7 +300,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 //   beam2 end   = tip
 // → 4 surviving queryNodes.
 {
-  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:load(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);
@@ -319,7 +319,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 // second clamp point); compliance still keeps it for the fixed-fixed solve.
 // Non-root beam endpoints stay visible.
 {
-  const src = 'support(both)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(both)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:load(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);

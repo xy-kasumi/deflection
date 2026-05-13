@@ -4,9 +4,9 @@ Deflection tool has tiny DSL to denote serially-connected beams.
 example
 ```
 support(both)
-mid:horz beam(aluminum rect(W30 H20 T2) L100) mid:force(0.5) end:force(0.5kgf)
-right beam(plastic moment(Ix1000 Iy1e6 J1000) L200) mid:force(0.3)
-up beam(steel rect(W7 H5) L50) force(0.2)
+mid:horz beam(aluminum rect(W30 H20 T2) L100) mid:load(0.5) end:load(0.5kgf)
+right beam(plastic moment(Ix1000 Iy1e6 J1000) L200) mid:load(0.3)
+up beam(steel rect(W7 H5) L50) load(0.2)
 ```
 
 EBNF
@@ -46,7 +46,7 @@ UNIT
 * known `IDENT`:
     * material: `plastic`, `aluminum`, `steel`
     * shape: `rect`, `round`, `moment`
-    * attachment: `force`
+    * attachment: `load`
 * Default unit is "mm", "kgf", "mm4"
 * `horz` is ambiguous other than for the root beam
 * `end` is assumed for omitted loc-spec
@@ -59,6 +59,6 @@ env-defs
       its axis direction left free (so axial strain isn't over-constrained).
 * `mass_accel(<acceleration>)` defines mass-based. `mass_accel(1G)` is assumed when omitted.
   * e.g. `mass_accel(1G)`
-  * esentially a short-hand for adding `mid:force(<mass_of_the_beam x accel>)` for every beam
-  * note that we cannot write "gravity force towards specific direction" regardless of `mass_accel` or `force`
-    * essentially, we lump together gravity + intertia from acceleration + vibration into single "force"
+  * esentially a short-hand for adding `mid:load(<mass_of_the_beam x accel>)` for every beam
+  * note that we cannot write "gravity load towards specific direction" regardless of `mass_accel` or `load`
+    * essentially, we lump together gravity + intertia from acceleration + vibration into single "load"
