@@ -19,13 +19,6 @@ const COLOR_HEADLINE_ARROW = 0xd62828;
 const COLOR_BEAM = 0x9aa0a6;
 const COLOR_BEAM_HIGHLIGHT = 0x2563eb;
 
-// Magnitude bands for lobe rendering, relative to mean beam length `avgL`.
-// Floor is roughly beamRadius * 1.5 (so the underflow sphere just edges out
-// of the rod); ceiling caps the wireframe well under one beam length so the
-// konpeito (vertex-bumped to ~1.4×) stays visually contained.
-const LOBE_FLOOR_REL = 0.02;
-const LOBE_CEIL_REL = 0.18;
-
 // Click vs drag: pointerup with movement below this threshold (squared, px) is a click.
 const CLICK_MOVE_THRESH_SQ = 16;
 
@@ -113,19 +106,30 @@ export class Scene {
 
     const focused = editor?.focused === true;
 
+    // Visual unit `u` — the rod radius. Everything else is `u × k` where k
+    // states the visual relationship (joint is 2u → twice as fat as the rod,
+    // walker-hint sits 10u away, etc.). `avgL/80` is the only place avgL
+    // touches geometry; the floor keeps glyphs visible on degenerately short
+    // chains. Change `u` and the whole scene scales together coherently.
     const avgL = beams.reduce((s, b) => s + b.length_mm, 0) / beams.length;
-    const beamRadius = Math.max(0.5, avgL / 80);
-    const jointRadius = Math.max(0.8, avgL / 40);
-    const attachRadius = Math.max(0.6, avgL / 50);
-    const clampHalf = jointRadius * 1.1;
+    const u = Math.max(0.5, avgL / 80);
 
-    const jointGeom = new THREE.SphereGeometry(jointRadius, 12, 8);
+    const rodR    = u;
+    const jointR  = u * 2;        // sticks out distinctly from the rod
+    const attachR = u * 1.5;      // smaller marker for loads
+    const clampHalf = u * 2.2;    // box just wider than the joint sphere
+    const walkerHintOffset = u * 10;
+    const labelOffset      = u * 10;
+    const hitRadius        = u * 2;   // joint-sized click target
+    const lobeFloor = u * 1.5;        // underflow sphere just edges past the rod
+    const lobeCeil  = u * 14;         // konpeito stays well under one beam length (80u)
+
+    const jointGeom = new THREE.SphereGeometry(jointR, 12, 8);
     const clampGeom = new THREE.BoxGeometry(clampHalf * 2, clampHalf * 2, clampHalf * 2);
-    const attachGeom = new THREE.SphereGeometry(attachRadius, 10, 6);
+    const attachGeom = new THREE.SphereGeometry(attachR, 10, 6);
     const jointMat = new THREE.MeshBasicMaterial({ color: COLOR_JOINT });
     const clampMat = new THREE.MeshBasicMaterial({ color: COLOR_CLAMP });
     const attachMat = new THREE.MeshBasicMaterial({ color: COLOR_ATTACHMENT });
-    const walkerHintOffset = avgL / 8;
 
     const bbox = new THREE.Box3();
     bbox.makeEmpty();
@@ -140,8 +144,8 @@ export class Scene {
       // Capsule = cylinder + hemispherical end caps in one geometry. Trim the
       // cylinder portion by 2r so the visual span (caps included) matches
       // b.length_mm exactly. Local axis is +Y; rotate to align with beam +fwd.
-      const cylPart = Math.max(beamRadius * 0.01, b.length_mm - 2 * beamRadius);
-      const geom = new THREE.CapsuleGeometry(beamRadius, cylPart, 6, 16);
+      const cylPart = Math.max(rodR * 0.01, b.length_mm - 2 * rodR);
+      const geom = new THREE.CapsuleGeometry(rodR, cylPart, 6, 16);
       geom.translate(0, b.length_mm / 2, 0);
       const beamMat = new THREE.MeshBasicMaterial({
         color: isCurrent ? COLOR_BEAM_HIGHLIGHT : COLOR_BEAM,
@@ -170,7 +174,7 @@ export class Scene {
         const hintColor = isCurrent ? COLOR_WALKER_HINT_HIGHLIGHT : COLOR_BEAM;
         const upVec = new THREE.Vector3(...b.startFrame.up);
         const fwdOffset = b.length_mm * 0.08;
-        const walkerHintGeom = new THREE.SphereGeometry(attachRadius * 0.9, 10, 6);
+        const walkerHintGeom = new THREE.SphereGeometry(attachR * 0.9, 10, 6);
         const walkerHint = new THREE.Mesh(
           walkerHintGeom,
           new THREE.MeshBasicMaterial({ color: hintColor }),
@@ -226,12 +230,10 @@ export class Scene {
     bbox.getCenter(this.center);
     const size = bbox.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
-    this.scaleHalf = Math.max(50, maxDim * 0.8 + Math.max(beamRadius * 6, 10));
+    this.scaleHalf = Math.max(50, maxDim * 0.8 + Math.max(u * 6, 10));
 
-    const hitRadius = avgL / 25;
-    const labelOffset = avgL / 8;
     if (sim && sim.nodes.length > 0) {
-      this.drawDeflection(beams, sim, avgL, maxDim, hitRadius, labelOffset, selectedNodeIx, focused);
+      this.drawDeflection(beams, sim, maxDim, hitRadius, labelOffset, lobeFloor, lobeCeil, selectedNodeIx, focused);
     }
 
     this.refresh();
@@ -240,15 +242,14 @@ export class Scene {
   private drawDeflection(
     beams: BeamNode[],
     sim: SimResult,
-    avgL: number,
     maxDim: number,
     hitRadius: number,
     labelOffset: number,
+    lobeFloor: number,
+    lobeCeil: number,
     selectedNodeIx: number,
     focused: boolean,
   ): void {
-    const floor = avgL * LOBE_FLOOR_REL;
-    const ceil = avgL * LOBE_CEIL_REL;
 
     for (let ix = 0; ix < sim.nodes.length; ix++) {
       const n = sim.nodes[ix]!;
@@ -257,8 +258,8 @@ export class Scene {
 
       const outerMax = n.delta_max_mm * sim.display_scale;
       let state: 'underflow' | 'normal' | 'overflow';
-      if (outerMax < floor) state = 'underflow';
-      else if (outerMax > ceil) state = 'overflow';
+      if (outerMax < lobeFloor) state = 'underflow';
+      else if (outerMax > lobeCeil) state = 'overflow';
       else state = 'normal';
 
       const opacity = focused
@@ -271,9 +272,9 @@ export class Scene {
       if (state === 'normal') {
         visual = buildNormalLobe(n.directional, sim.display_scale, opacity);
       } else if (state === 'underflow') {
-        visual = buildUnderflowSphere(floor, opacity);
+        visual = buildUnderflowSphere(lobeFloor, opacity);
       } else {
-        visual = buildKonpeito(ceil, opacity);
+        visual = buildKonpeito(lobeCeil, opacity);
       }
       visual.position.copy(worldPos);
       this.content.add(visual);
