@@ -133,6 +133,7 @@ html, body {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  user-select: none;
 }
 
 #scale-overlay .label {
