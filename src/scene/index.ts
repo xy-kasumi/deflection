@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import type { BeamNode, Vec3 } from './walker';
-import type { SimResult } from './sim/run';
-import type { Directional } from './sim/directional';
-import { formatMm } from './readout';
+import type { BeamNode, Vec3 } from '../walker';
+import type { SimResult } from '../sim/run';
+import type { Directional } from '../sim/directional';
+import { formatMm } from '../readout';
 
 const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
