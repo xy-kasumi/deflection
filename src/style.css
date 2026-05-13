@@ -1,12 +1,48 @@
+/* Design tokens — single source of truth for the UI chrome's visual
+   language. Mode-* hues intentionally share hex values with scene/tokens.ts
+   so the readout bars carry the same emotional register as the 3D scene
+   (greys = structural, orange = load, green/blue = editor focus). */
+:root {
+  --text-fg:    #1f2328;
+  --text-muted: #6a737d;
+
+  --bg-app:     #f6f7f9;
+  --bg-panel:   #ffffff;
+  --bg-hover:   #eef0f3;
+  --border:     #d8dce2;
+
+  --overlay-bg:        rgba(255, 255, 255, 0.85);
+  --overlay-bg-strong: rgba(255, 255, 255, 0.92);
+  --overlay-shadow:    0 1px 3px rgba(0, 0, 0, 0.08);
+
+  /* Beam-mode swatches for the readout chips. Bend/torsion hues mirror
+     scene/tokens.ts COLOR.{walkerHintCurrent, beamCurrent, deformed}. */
+  --mode-axial:   #6a737d;
+  --mode-bend-x:  #2e7d32;
+  --mode-bend-y:  #2563eb;
+  --mode-torsion: #d97a1a;
+
+  /* Diagnostic squiggles. The error red is deliberately *not* the scene's
+     deformedPeak — that one means "off-scale", this one means "wrong". */
+  --diag-error:   #d62828;
+  --diag-warning: #c79100;
+
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-sm: 3px;
+  --radius-md: 6px;
+}
+
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  font-family: system-ui, -apple-system, sans-serif;
-  background: #f6f7f9;
-  color: #1f2328;
+  font-family: var(--font-sans);
+  background: var(--bg-app);
+  color: var(--text-fg);
 }
 
 #app {
@@ -17,8 +53,8 @@ html, body {
 #editor-panel {
   width: 420px;
   flex-shrink: 0;
-  background: #ffffff;
-  border-right: 1px solid #d8dce2;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -35,51 +71,51 @@ html, body {
   flex: 2 1 0;
   min-height: 0;
   overflow-y: auto;
-  border-top: 1px solid #d8dce2;
+  border-top: 1px solid var(--border);
   padding: 10px 12px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.5;
-  background: #fbfbfd;
-  color: #1f2328;
+  background: var(--bg-app);
+  color: var(--text-fg);
   white-space: pre-wrap;
 }
 
 #info .ro-headline {
   font-weight: 600;
   margin-bottom: 6px;
-  color: #1f2328;
+  color: var(--text-fg);
 }
 
 #info .ro-section {
   margin-top: 8px;
-  color: #6a737d;
+  color: var(--text-muted);
 }
 
 #info .ro-row {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 6px;
-  color: #1f2328;
+  color: var(--text-fg);
 }
 
 #info .ro-row .frac {
-  color: #6a737d;
+  color: var(--text-muted);
 }
 
 #info .ro-bar {
   display: inline-block;
   height: 6px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   margin-right: 6px;
   vertical-align: middle;
 }
-#info .ro-bar.ax  { background: #6a737d; }
-#info .ro-bar.bx  { background: #2e7d32; }
-#info .ro-bar.by  { background: #2563eb; }
-#info .ro-bar.tor { background: #d97a1a; }
+#info .ro-bar.ax  { background: var(--mode-axial); }
+#info .ro-bar.bx  { background: var(--mode-bend-x); }
+#info .ro-bar.by  { background: var(--mode-bend-y); }
+#info .ro-bar.tor { background: var(--mode-torsion); }
 
-#info .ro-empty { color: #8a929a; font-style: italic; }
+#info .ro-empty { color: var(--text-muted); font-style: italic; }
 
 /* CodeMirror tuning */
 .cm-editor {
@@ -87,7 +123,7 @@ html, body {
 }
 
 .cm-scroller {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .cm-content {
@@ -96,16 +132,16 @@ html, body {
 
 /* Diagnostic squiggles. CM6 lint renders these classes on marked ranges. */
 .cm-lintRange-error {
-  background-image: linear-gradient(45deg, transparent 65%, #d62828 65%, #d62828 80%, transparent 80%),
-                    linear-gradient(135deg, transparent 65%, #d62828 65%, #d62828 80%, transparent 80%);
+  background-image: linear-gradient(45deg, transparent 65%, var(--diag-error) 65%, var(--diag-error) 80%, transparent 80%),
+                    linear-gradient(135deg, transparent 65%, var(--diag-error) 65%, var(--diag-error) 80%, transparent 80%);
   background-size: 6px 4px;
   background-repeat: repeat-x;
   background-position: bottom;
 }
 
 .cm-lintRange-warning {
-  background-image: linear-gradient(45deg, transparent 65%, #c79100 65%, #c79100 80%, transparent 80%),
-                    linear-gradient(135deg, transparent 65%, #c79100 65%, #c79100 80%, transparent 80%);
+  background-image: linear-gradient(45deg, transparent 65%, var(--diag-warning) 65%, var(--diag-warning) 80%, transparent 80%),
+                    linear-gradient(135deg, transparent 65%, var(--diag-warning) 65%, var(--diag-warning) 80%, transparent 80%);
   background-size: 6px 4px;
   background-repeat: repeat-x;
   background-position: bottom;
@@ -127,17 +163,17 @@ html, body {
   flex-direction: column;
   gap: 4px;
   padding: 6px 8px;
-  background: rgba(255, 255, 255, 0.85);
-  border: 1px solid #d8dce2;
-  border-radius: 6px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--overlay-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
   font-size: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--overlay-shadow);
   user-select: none;
 }
 
 #scale-overlay .label {
-  color: #6a737d;
+  color: var(--text-muted);
   font-size: 11px;
 }
 
@@ -149,22 +185,22 @@ html, body {
 #scale-overlay button {
   border: 1px solid transparent;
   background: transparent;
-  color: #1f2328;
+  color: var(--text-fg);
   padding: 3px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font: inherit;
   line-height: 1;
 }
 
 #scale-overlay button:hover {
-  background: #eef0f3;
+  background: var(--bg-hover);
 }
 
 #scale-overlay button.active {
-  background: #1f2328;
-  color: #ffffff;
-  border-color: #1f2328;
+  background: var(--text-fg);
+  color: var(--bg-panel);
+  border-color: var(--text-fg);
 }
 
 #canvas {
@@ -189,11 +225,11 @@ html, body {
   position: absolute;
   top: 0;
   left: 0;
-  font: 11px/1 ui-monospace, "SF Mono", Menlo, monospace;
-  color: #5a5a5a;
-  background: rgba(255, 255, 255, 0.78);
+  font: 11px/1 var(--font-mono);
+  color: var(--text-muted);
+  background: var(--overlay-bg);
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
@@ -201,9 +237,9 @@ html, body {
 }
 
 .scene-label.selected {
-  color: #1f2328;
+  color: var(--text-fg);
   font-weight: 600;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--overlay-bg-strong);
 }
 
 .scene-label.hidden { display: none; }
