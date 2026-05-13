@@ -3,7 +3,7 @@ import { Scene } from './scene';
 import { parse, type BeamDef } from './dsl/parse';
 import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
-import { runSim, type DisplayScale, type SimResult } from './sim/run';
+import { runSim, type SimResult } from './sim/run';
 import { getSupportKind } from './sim/compliance';
 import { renderReadout } from './readout';
 
@@ -19,7 +19,7 @@ const infoEl = document.getElementById('info') as HTMLElement;
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const scaleOverlayEl = document.getElementById('scale-overlay') as HTMLElement;
 
-let currentScale: DisplayScale = 1;
+let currentScale = 1;
 let lastSrc = INITIAL_SRC;
 let cursorOffset = 0;
 let editorFocused = false;
@@ -48,7 +48,6 @@ function render() {
   const sd = semcheck(structure);
   const { beams, diagnostics: wd } = walk(structure);
   const sim = runSim(beams, structure);
-  sim.display_scale = currentScale;
   lastSim = sim;
   editor.setDiagnostics([...pd, ...sd, ...wd, ...sim.diagnostics]);
 
@@ -85,10 +84,11 @@ function updateScaleButtons() {
 scaleOverlayEl.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('button');
   if (!btn) return;
-  const s = Number(btn.dataset['scale']) as DisplayScale;
+  const s = Number(btn.dataset['scale']);
   if (s === currentScale) return;
   currentScale = s;
-  render();
+  updateScaleButtons();
+  scene.setDisplayScale(s);
 });
 
 const editor = new Editor(

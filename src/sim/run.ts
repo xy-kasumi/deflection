@@ -38,15 +38,12 @@ export interface SimBeam {
   torsion_fraction: number;
 }
 
-export type DisplayScale = 1 | 10 | 100 | 1000;
-
 export interface SimResult {
   nodes: NodeDeflectionResult[];
   // Index into `nodes` of the chain tip (see vocab). Default selection target
   // for the UI; the headline arrow anchors here when no other node is picked.
   // `-1` when no chain.
   tipNodeIx: number;
-  display_scale: DisplayScale;
   diagnostics: Diagnostic[];
 }
 
@@ -133,7 +130,6 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
   return {
     nodes,
     tipNodeIx,
-    display_scale: 1,
     diagnostics,
   };
 }
@@ -142,7 +138,6 @@ function emptyResult(): SimResult {
   return {
     nodes: [],
     tipNodeIx: -1,
-    display_scale: 1,
     diagnostics: [],
   };
 }
