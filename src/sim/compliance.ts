@@ -68,6 +68,20 @@ export function buildCompliances(
     }
   }
 
+  // For support(both), append a synthetic load node at the chain tip — the
+  // unknown reaction force the tip support contributes. We build cantilever
+  // compliance with this extra load, then solve for the reaction in a
+  // perpendicular-to-chord plane (force/flexibility method).
+  const supportKind = getSupportKind(structure);
+  const pinRoller = supportKind === 'both' && beams.length > 0;
+  let tipLoadIx = -1;
+  if (pinRoller) {
+    const last = beams.length - 1;
+    tipLoadIx = loadNodes.length;
+    loadNodes.push({ beamIx: last, offset_mm: beams[last]!.length_mm });
+    loadFmax_N.push(0); // placeholder; reaction is derived, not user-supplied.
+  }
+
   // Precompute per-beam rotation matrix R_i (frame columns) and tip world pos.
   const Rs: Mat3[] = beams.map((b) => frameToR(b.startFrame));
   const tipWorld: Vec3[] = beams.map((b) =>
@@ -160,26 +174,33 @@ export function buildCompliances(
     }
   }
 
+  if (pinRoller) {
+    const adjusted = applyPinRoller(
+      beams, queryNodes, loadNodes, entries, totalsMap, tipLoadIx,
+    );
+    if (!adjusted) {
+      // Couldn't apply (degenerate chord etc.) — drop the synthesized tip load
+      // and fall back to cantilever. A diagnostic is added below.
+      loadNodes.pop();
+      loadFmax_N.pop();
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (entries[i]!.loadIx === tipLoadIx) entries.splice(i, 1);
+      }
+      totalsMap.forEach((_, key) => {
+        if (Number(key.split(',')[1]) === tipLoadIx) totalsMap.delete(key);
+      });
+      diagnostics.push(supportFallbackDiag(structure));
+    } else {
+      // Adjustment succeeded; drop the synthesized tip load from public API.
+      loadNodes.pop();
+      loadFmax_N.pop();
+    }
+  }
+
   const totals = Array.from(totalsMap.entries()).map(([key, C]) => {
     const [q, p] = key.split(',').map(Number) as [number, number];
     return { queryIx: q, loadIx: p, C };
   });
-
-  // Optional: warn unsupported support config (single-beam chain w/ both is OK,
-  // multi-beam chain w/ both is deferred; main path treats as cantilever either way).
-  for (const env of structure.envs) {
-    if (env.name === 'support') {
-      const arg = env.params[0];
-      const argName = arg && arg.kind === 'ident' ? arg.name : '';
-      if (argName === 'both' && beams.length > 1) {
-        diagnostics.push({
-          severity: 'warning',
-          message: 'support(both) on a multi-beam chain is not yet supported — falling back to support(single)',
-          span: env.span,
-        });
-      }
-    }
-  }
 
   return {
     compliances: {
@@ -190,6 +211,160 @@ export function buildCompliances(
       totals,
     },
     diagnostics,
+  };
+}
+
+// ---------- pin-roller (support(both)) ----------
+//
+// Force/flexibility method: the released structure is the cantilever already
+// built above; the unknown is the tip's reaction force R, constrained to the
+// plane perpendicular to the root→tip chord (so the chord component is free —
+// otherwise the chain is over-constrained against axial elongation in a way
+// no real bolt-on support enforces).
+//
+// Solve for R from the compatibility condition that the chord-perpendicular
+// component of the tip's displacement is zero:
+//
+//   P · u_tip_ext  +  P · C_RR · R  =  0
+//   R  =  −P · (P · C_RR · P)⁺ · P · u_tip_ext
+//      =  M_neg · u_tip_ext
+//
+// where C_RR = C_tot[q_tip][tip_load], P = I − e·eᵀ. Then the effective
+// compliance from a real load p to query q becomes
+//
+//   C_eff[q][p]  =  C_tot[q][p]  +  C_tot[q][tip] · M_p,
+//   M_p          =  M_neg · C_tot[q_tip][p].
+//
+// Per-(beam, mode) attribution decomposes the same way: each beam's effective
+// entry gets the indirect-via-tip term added on top of its direct entry.
+//
+// Caveat: the root is still treated as fully clamped, so this is a
+// propped-cantilever model, not classical pinned-pinned. Good enough as a
+// rigid-bolted support model; not the textbook simply-supported beam.
+function applyPinRoller(
+  beams: BeamNode[],
+  queryNodes: Node[],
+  loadNodes: Node[],
+  entries: ComplianceEntry[],
+  totalsMap: Map<string, Mat3>,
+  tipLoadIx: number,
+): boolean {
+  const tipNode = loadNodes[tipLoadIx];
+  if (!tipNode) return false;
+  const last = beams[tipNode.beamIx];
+  if (!last) return false;
+  const tipWorld: Vec3 = addV(
+    last.startFrame.origin,
+    scaleV(last.startFrame.fwd, tipNode.offset_mm),
+  );
+  const chordLen = Math.hypot(tipWorld[0], tipWorld[1], tipWorld[2]);
+  if (chordLen < 1e-9) return false;
+  const e: Vec3 = [tipWorld[0] / chordLen, tipWorld[1] / chordLen, tipWorld[2] / chordLen];
+
+  // Orthonormal basis of the chord-perpendicular plane.
+  const [u, v] = orthoBasisFromChord(e);
+
+  const tipQueryIx = queryNodes.findIndex(
+    (n) => n.beamIx === tipNode.beamIx && n.offset_mm === tipNode.offset_mm,
+  );
+  if (tipQueryIx < 0) return false;
+  const C_RR = totalsMap.get(`${tipQueryIx},${tipLoadIx}`);
+  if (!C_RR) return false;
+
+  // 2×2 in (u, v) basis.
+  const Cuu = quad(u, C_RR, u);
+  const Cuv = quad(u, C_RR, v);
+  const Cvu = quad(v, C_RR, u);
+  const Cvv = quad(v, C_RR, v);
+  const det = Cuu * Cvv - Cuv * Cvu;
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-18) return false;
+  const Iuu =  Cvv / det;
+  const Iuv = -Cuv / det;
+  const Ivu = -Cvu / det;
+  const Ivv =  Cuu / det;
+
+  // M_neg = −(Iuu u uᵀ + Iuv u vᵀ + Ivu v uᵀ + Ivv v vᵀ).
+  const M_neg = newMat3();
+  addOuter(M_neg, u, u, -Iuu);
+  addOuter(M_neg, u, v, -Iuv);
+  addOuter(M_neg, v, u, -Ivu);
+  addOuter(M_neg, v, v, -Ivv);
+
+  // M_p[p] = M_neg · C_tot[q_tip][p] for each real load p.
+  const realLoadCount = loadNodes.length - 1; // tip is the last entry.
+  const M_p: Mat3[] = [];
+  for (let p = 0; p < realLoadCount; p++) {
+    const C_tp = totalsMap.get(`${tipQueryIx},${p}`) ?? newMat3();
+    M_p.push(matMul3(M_neg, C_tp));
+  }
+
+  // Build (q, p, b, m) → Mat3 lookup over current entries.
+  const entryMap = new Map<string, Mat3>();
+  for (const en of entries) {
+    entryMap.set(`${en.queryIx},${en.loadIx},${en.beamIx},${en.mode}`, en.C);
+  }
+
+  // Adjust every real-load entry by the via-tip term.
+  const allModes: Mode[] = ['axial', 'torsion', 'bendIx', 'bendIy'];
+  const adjusted = new Map<string, Mat3>();
+  for (let q = 0; q < queryNodes.length; q++) {
+    for (let p = 0; p < realLoadCount; p++) {
+      for (let b = 0; b < beams.length; b++) {
+        for (const mode of allModes) {
+          const direct = entryMap.get(`${q},${p},${b},${mode}`);
+          const viaTip = entryMap.get(`${q},${tipLoadIx},${b},${mode}`);
+          if (!direct && !viaTip) continue;
+          const out = newMat3();
+          if (direct) addMat(out, direct);
+          if (viaTip) addMat(out, matMul3(viaTip, M_p[p]!));
+          if (isZeroMat(out)) continue;
+          adjusted.set(`${q},${p},${b},${mode}`, out);
+        }
+      }
+    }
+  }
+
+  // Replace entries (drop tip-load entries; replace real-load entries).
+  entries.length = 0;
+  for (const [key, C] of adjusted) {
+    const [qStr, pStr, bStr, mStr] = key.split(',');
+    entries.push({
+      queryIx: Number(qStr),
+      loadIx: Number(pStr),
+      beamIx: Number(bStr),
+      mode: mStr as Mode,
+      C,
+    });
+  }
+
+  // Rebuild totals from adjusted entries.
+  totalsMap.clear();
+  for (const en of entries) {
+    const key = `${en.queryIx},${en.loadIx}`;
+    let tot = totalsMap.get(key);
+    if (!tot) { tot = newMat3(); totalsMap.set(key, tot); }
+    addMat(tot, en.C);
+  }
+  return true;
+}
+
+function getSupportKind(structure: Structure): 'single' | 'both' | undefined {
+  for (const env of structure.envs) {
+    if (env.name !== 'support') continue;
+    const arg = env.params[0];
+    if (arg && arg.kind === 'ident' && (arg.name === 'single' || arg.name === 'both')) {
+      return arg.name;
+    }
+  }
+  return undefined;
+}
+
+function supportFallbackDiag(structure: Structure): Diagnostic {
+  const envSpan = structure.envs.find((e) => e.name === 'support')?.span ?? { start: 0, end: 0 };
+  return {
+    severity: 'warning',
+    message: 'support(both): chord is degenerate or compliance is singular — falling back to support(single)',
+    span: envSpan,
   };
 }
 
@@ -339,4 +514,44 @@ function crossV(a: Vec3, b: Vec3): Vec3 {
     a[2] * b[0] - a[0] * b[2],
     a[0] * b[1] - a[1] * b[0],
   ];
+}
+
+function matMul3(A: Mat3, B: Mat3): Mat3 {
+  const C = newMat3();
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      let s = 0;
+      for (let k = 0; k < 3; k++) s += (A[r * 3 + k] as number) * (B[k * 3 + c] as number);
+      C[r * 3 + c] = s;
+    }
+  }
+  return C;
+}
+
+function quad(u: Vec3, M: Mat3, v: Vec3): number {
+  // uᵀ M v
+  return u[0] * (M[0] * v[0] + M[1] * v[1] + M[2] * v[2])
+       + u[1] * (M[3] * v[0] + M[4] * v[1] + M[5] * v[2])
+       + u[2] * (M[6] * v[0] + M[7] * v[1] + M[8] * v[2]);
+}
+
+function addOuter(into: Mat3, a: Vec3, b: Vec3, s: number): void {
+  into[0] += s * a[0] * b[0]; into[1] += s * a[0] * b[1]; into[2] += s * a[0] * b[2];
+  into[3] += s * a[1] * b[0]; into[4] += s * a[1] * b[1]; into[5] += s * a[1] * b[2];
+  into[6] += s * a[2] * b[0]; into[7] += s * a[2] * b[1]; into[8] += s * a[2] * b[2];
+}
+
+// Returns two orthonormal vectors spanning the plane perpendicular to `e`.
+function orthoBasisFromChord(e: Vec3): [Vec3, Vec3] {
+  const ax: Vec3 =
+    Math.abs(e[0]) <= Math.abs(e[1]) && Math.abs(e[0]) <= Math.abs(e[2])
+      ? [1, 0, 0]
+      : Math.abs(e[1]) <= Math.abs(e[2])
+        ? [0, 1, 0]
+        : [0, 0, 1];
+  const c1 = crossV(e, ax);
+  const c1len = Math.hypot(c1[0], c1[1], c1[2]);
+  const u: Vec3 = [c1[0] / c1len, c1[1] / c1len, c1[2] / c1len];
+  const v = crossV(e, u);
+  return [u, v];
 }

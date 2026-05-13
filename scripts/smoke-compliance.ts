@@ -240,6 +240,55 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   }
 }
 
+// Test 5: support(both), single horz beam steel rect(W10 H10) L100, force at
+// midpoint. Propped cantilever: chord = +X, perp plane = YZ. Tip Y/Z must be
+// pinned to zero; chord (axial X) is released and matches cantilever axial.
+//
+// Classical reaction for a fixed-pin beam under centered load: R = 5P/16 at
+// the pinned end. Compliance picture: C_eff[tip][p][y,y] = 5L³/48EIx +
+// (L³/3EIx)·(-5/16) = 0. So we verify that the perpendicular tip cells are
+// exactly zero post-adjust.
+{
+  const src = 'support(both)\nhorz beam(steel rect(W10 H10) L100) mid:force(1kgf)';
+  const { structure } = parse(src);
+  const { beams } = walk(structure);
+  const { compliances, diagnostics: cd } = buildCompliances(beams, structure);
+
+  console.log('\n-- Test 5: support(both) horz cantilever, force at midpoint --');
+  if (cd.some((d) => d.severity === 'error')) {
+    console.log('FAIL: compliance diagnostics:', cd);
+    process.exit(1);
+  }
+  if (compliances.loadNodes.length !== 1) {
+    console.log(`FAIL: expected 1 real load after adjust, got ${compliances.loadNodes.length}`);
+    process.exit(1);
+  }
+  const total = compliances.totals.find((t) => t.queryIx === 0 && t.loadIx === 0);
+  if (!total) { console.log('FAIL: no total[0][0]'); process.exit(1); }
+  const C = total.C;
+  console.log('C_eff[tip][p_mid] (row-major):');
+  console.log(`  [${C[0].toExponential(4)}, ${C[1].toExponential(4)}, ${C[2].toExponential(4)}]`);
+  console.log(`  [${C[3].toExponential(4)}, ${C[4].toExponential(4)}, ${C[5].toExponential(4)}]`);
+  console.log(`  [${C[6].toExponential(4)}, ${C[7].toExponential(4)}, ${C[8].toExponential(4)}]`);
+
+  const L = 100;
+  const E = MATERIALS.steel.E_MPa;
+  const A = 100;
+  // Chord = +X → perpendicular Y, Z must cancel exactly.
+  check('C_eff[tip][mid][y,y] = 0 (perp)', C[4], 0, 1e-12);
+  check('C_eff[tip][mid][z,z] = 0 (perp)', C[8], 0, 1e-12);
+  // Chord (X) is released → axial cantilever response remains.
+  check('C_eff[tip][mid][x,x] = L/(2·E·A)', C[0], L / (2 * E * A), 1e-12);
+
+  // Per-(beam, mode) decomposition: bendIx entry's [y,y] should still sum
+  // with itself to 0 (only one beam). The presence of the entry confirms the
+  // via-tip reaction was injected.
+  const ymode = compliances.entries
+    .filter((e) => e.queryIx === 0 && e.loadIx === 0 && e.mode === 'bendIx')
+    .reduce((s, e) => s + e.C[4]!, 0);
+  check('Σ bendIx entries [y,y] = 0', ymode, 0, 1e-12);
+}
+
 if (process.exitCode) {
   console.log('\nSMOKE FAILED');
 } else {
