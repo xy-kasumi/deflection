@@ -4,7 +4,7 @@ import { KGF_TO_N } from './state';
 // Renders the deflection breakdown into #readout. Plain DOM, no framework.
 // Keep this file impl-agnostic about how SimResult was built: it only reads.
 
-export function renderReadout(el: HTMLElement, sim: SimResult): void {
+export function renderReadout(el: HTMLElement, sim: SimResult, selectedNodeIx: number): void {
   el.innerHTML = '';
 
   if (sim.nodes.length === 0) {
@@ -12,21 +12,24 @@ export function renderReadout(el: HTMLElement, sim: SimResult): void {
     return;
   }
 
-  const tip = sim.nodes[sim.tipNodeIx];
-  if (!tip) return;
+  const sel = sim.nodes[selectedNodeIx];
+  if (!sel) return;
 
   const headline = document.createElement('div');
   headline.className = 'ro-headline';
-  headline.textContent = `tip δ ≈ ${formatMm(tip.delta_max_mm)}`;
+  const tag = selectedNodeIx === sim.tipNodeIx
+    ? 'tip'
+    : `beam${sel.beamIx} @${formatMm(sel.offset_mm)}`;
+  headline.textContent = `${tag} δ ≈ ${formatMm(sel.delta_max_mm)}`;
   el.appendChild(headline);
 
   // Forces section.
-  if (sim.forces.length > 0) {
+  if (sel.forces.length > 0) {
     const hdr = document.createElement('div');
     hdr.className = 'ro-section';
     hdr.textContent = 'Forces:';
     el.appendChild(hdr);
-    for (const f of sim.forces) {
+    for (const f of sel.forces) {
       const row = document.createElement('div');
       row.className = 'ro-row';
       const left = document.createElement('span');
@@ -40,12 +43,12 @@ export function renderReadout(el: HTMLElement, sim: SimResult): void {
   }
 
   // Beams section.
-  if (sim.beams.length > 0) {
+  if (sel.beams.length > 0) {
     const hdr = document.createElement('div');
     hdr.className = 'ro-section';
     hdr.textContent = 'Beams:';
     el.appendChild(hdr);
-    for (const b of sim.beams) {
+    for (const b of sel.beams) {
       const row = document.createElement('div');
       row.className = 'ro-row';
       const left = document.createElement('span');
@@ -73,15 +76,17 @@ function modeChip(cls: string, frac: number): HTMLElement {
   return bar;
 }
 
-function formatMm(v: number): string {
+export function formatMm(v: number): string {
+  if (v === 0) return '0';
   const a = Math.abs(v);
-  if (a === 0) return '0';
-  if (a >= 100)  return `${v.toFixed(0)} mm`;
-  if (a >= 10)   return `${v.toFixed(1)} mm`;
-  if (a >= 1)    return `${v.toFixed(2)} mm`;
-  if (a >= 0.01) return `${v.toFixed(3)} mm`;
-  if (a >= 1e-4) return `${v.toFixed(5)} mm`;
-  return `${v.toExponential(2)} mm`;
+  const exp = Math.floor(Math.log10(a));
+  if (exp < -4) return `${v.toExponential(1)} mm`;
+  const decimals = 1 - exp;
+  const scale = 10 ** decimals;
+  const rounded = Math.round(v * scale) / scale;
+  return decimals > 0
+    ? `${rounded.toFixed(decimals)} mm`
+    : `${rounded} mm`;
 }
 
 function formatForce(N: number): string {

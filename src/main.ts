@@ -3,7 +3,7 @@ import { Scene } from './scene';
 import { parse, type BeamDef } from './dsl/parse';
 import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
-import { runSim, type DisplayScale } from './sim/run';
+import { runSim, type DisplayScale, type SimResult } from './sim/run';
 import { getSupportKind } from './sim/compliance';
 import { renderReadout } from './readout';
 
@@ -18,12 +18,29 @@ const infoEl = document.getElementById('info') as HTMLElement;
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const scaleOverlayEl = document.getElementById('scale-overlay') as HTMLElement;
 
-const scene = new Scene(canvas);
-
 let currentScale: DisplayScale = 1;
 let lastSrc = INITIAL_SRC;
 let cursorOffset = 0;
 let editorFocused = false;
+let selectedKey: { beamIx: number; offset_mm: number } | null = null;
+let lastSim: SimResult | null = null;
+
+const scene = new Scene(canvas, (nodeIx) => {
+  const n = lastSim?.nodes[nodeIx];
+  if (!n) return;
+  selectedKey = { beamIx: n.beamIx, offset_mm: n.offset_mm };
+  render();
+});
+
+function resolveSelectedNodeIx(sim: SimResult): number {
+  if (selectedKey) {
+    const ix = sim.nodes.findIndex(
+      (n) => n.beamIx === selectedKey!.beamIx && n.offset_mm === selectedKey!.offset_mm,
+    );
+    if (ix >= 0) return ix;
+  }
+  return sim.tipNodeIx;
+}
 
 function render() {
   const { structure, diagnostics: pd } = parse(lastSrc);
@@ -31,16 +48,21 @@ function render() {
   const { beams, diagnostics: wd } = walk(structure);
   const sim = runSim(beams, structure);
   sim.display_scale = currentScale;
+  lastSim = sim;
   editor.setDiagnostics([...pd, ...sd, ...wd, ...sim.diagnostics]);
 
   const currentBeamIx = editorFocused
     ? findBeamAtOffset(structure.beams, cursorOffset)
     : null;
-  scene.update(beams, sim, getSupportKind(structure), {
-    currentBeamIx,
-    focused: editorFocused,
-  });
-  renderReadout(infoEl, sim);
+  const selectedNodeIx = resolveSelectedNodeIx(sim);
+  scene.update(
+    beams,
+    sim,
+    getSupportKind(structure),
+    { currentBeamIx, focused: editorFocused },
+    selectedNodeIx,
+  );
+  renderReadout(infoEl, sim, selectedNodeIx);
   updateScaleButtons();
 }
 

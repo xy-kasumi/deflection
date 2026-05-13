@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { BeamNode, Vec3 } from './walker';
 import type { SimResult } from './sim/run';
 import type { Directional } from './sim/directional';
+import { formatMm } from './readout';
 
 const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
@@ -11,11 +12,19 @@ const COLOR_JOINT = 0x444b53;
 const COLOR_CLAMP = 0x444b53;
 const COLOR_ATTACHMENT = 0xd97a1a;
 const COLOR_WALKER_HINT_HIGHLIGHT = 0x2e7d32;
-const COLOR_DEFORMED = 0xd97a1a;
+const COLOR_DEFORMED = 0xd97a1a;          // orange — deflection family (lobe + underflow)
+const COLOR_DEFORMED_OVERFLOW = 0xc62828; // red — clipped magnitude
 const COLOR_HEADLINE_ARROW = 0xd62828;
 
 const COLOR_BEAM = 0x9aa0a6;
 const COLOR_BEAM_HIGHLIGHT = 0x2563eb;
+
+// Magnitude bands for lobe rendering, relative to scene `maxDim`.
+const LOBE_FLOOR_REL = 0.005;
+const LOBE_CEIL_REL = 0.5;
+
+// Click vs drag: pointerup with movement below this threshold (squared, px) is a click.
+const CLICK_MOVE_THRESH_SQ = 16;
 
 // Drag tuning: time-constants of the input low-pass and post-release decay.
 const SMOOTH_K = 18;
@@ -24,6 +33,11 @@ const STOP_VEL = 0.1;
 const YAW_PER_PX = 1 / 150;
 
 const deg = (d: number) => (d * Math.PI) / 180;
+
+interface LabelEntry {
+  el: HTMLDivElement;
+  worldPos: THREE.Vector3;
+}
 
 export class Scene {
   private renderer: THREE.WebGLRenderer;
@@ -38,11 +52,18 @@ export class Scene {
   private lastPointerX = 0;
   private lastFrameTime = 0;
   private animHandle = 0;
-  // World-frame extent used for camera framing. Recomputed on update().
   private center: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
   private scaleHalf = 100;
 
-  constructor(canvas: HTMLCanvasElement) {
+  private onPick: (nodeIx: number) => void;
+  private pickables: THREE.Mesh[] = [];
+  private raycaster = new THREE.Raycaster();
+  private labelLayer: HTMLDivElement;
+  private labelEntries: LabelEntry[] = [];
+
+  constructor(canvas: HTMLCanvasElement, onPick: (nodeIx: number) => void) {
+    this.onPick = onPick;
+
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.root = new THREE.Scene();
@@ -54,6 +75,15 @@ export class Scene {
     this.pitch = deg(ISO_PITCH_DEG);
     this.targetYaw = this.yaw;
 
+    // Take focus on canvas interaction so CodeMirror's `focusChanged` event
+    // fires — that's what flips the scene into inspection mode.
+    canvas.tabIndex = -1;
+    canvas.style.outline = 'none';
+
+    this.labelLayer = document.createElement('div');
+    this.labelLayer.className = 'scene-labels';
+    canvas.parentElement!.appendChild(this.labelLayer);
+
     const ro = new ResizeObserver(() => this.onResize());
     ro.observe(canvas);
 
@@ -62,11 +92,14 @@ export class Scene {
 
   update(
     beams: BeamNode[],
-    sim?: SimResult,
-    supportKind?: 'single' | 'both',
-    editor?: { currentBeamIx: number | null; focused: boolean },
+    sim: SimResult | undefined,
+    supportKind: 'single' | 'both' | undefined,
+    editor: { currentBeamIx: number | null; focused: boolean } | undefined,
+    selectedNodeIx: number,
   ): void {
     disposeChildren(this.content);
+    this.pickables = [];
+    this.clearLabels();
 
     if (beams.length === 0) {
       this.center.set(0, 0, 0);
@@ -75,7 +108,8 @@ export class Scene {
       return;
     }
 
-    // Determine a length scale (average beam length) for visual sizing.
+    const focused = editor?.focused === true;
+
     const avgL = beams.reduce((s, b) => s + b.length_mm, 0) / beams.length;
     const beamRadius = Math.max(0.5, avgL / 80);
     const jointRadius = Math.max(0.8, avgL / 40);
@@ -88,11 +122,7 @@ export class Scene {
     const jointMat = new THREE.MeshBasicMaterial({ color: COLOR_JOINT });
     const clampMat = new THREE.MeshBasicMaterial({ color: COLOR_CLAMP });
     const attachMat = new THREE.MeshBasicMaterial({ color: COLOR_ATTACHMENT });
-    // Walker hint is offset along both walker-up (so the section orientation
-    // is visible) and walker-fwd (so it's unambiguously associated with this
-    // beam, not the parent's end joint).
     const walkerHintOffset = avgL / 8;
-    const showWalkerHints = editor?.focused === true;
 
     const bbox = new THREE.Box3();
     bbox.makeEmpty();
@@ -102,12 +132,11 @@ export class Scene {
       const start = new THREE.Vector3(...b.startFrame.origin);
       const fwd = new THREE.Vector3(...b.startFrame.fwd);
       const end = start.clone().add(fwd.clone().multiplyScalar(b.length_mm));
-      const isCurrent = showWalkerHints && editor!.currentBeamIx === i;
+      const isCurrent = focused && editor!.currentBeamIx === i;
 
-      // Capsule = cylinder + hemispherical end caps in one geometry. `length`
-      // is the cylinder portion; trim it by 2r so the visual span (caps
-      // included) matches b.length_mm exactly. Local axis is +Y; rotate to
-      // align with beam +fwd, then translate.
+      // Capsule = cylinder + hemispherical end caps in one geometry. Trim the
+      // cylinder portion by 2r so the visual span (caps included) matches
+      // b.length_mm exactly. Local axis is +Y; rotate to align with beam +fwd.
       const cylPart = Math.max(beamRadius * 0.01, b.length_mm - 2 * beamRadius);
       const geom = new THREE.CapsuleGeometry(beamRadius, cylPart, 6, 16);
       geom.translate(0, b.length_mm / 2, 0);
@@ -122,19 +151,19 @@ export class Scene {
       mesh.position.copy(start);
       this.content.add(mesh);
 
-      // Non-root beams: sphere at the parent-attachment point (this beam's start).
-      if (i > 0) {
-        const joint = new THREE.Mesh(jointGeom, jointMat);
-        joint.position.copy(start);
-        this.content.add(joint);
-      }
+      // Structural decorations (joints, loads, walker hints) only in editing mode.
+      // Inspection mode keeps just the beam skeleton + clamps + deflection visuals.
+      if (focused) {
+        // Non-root beams: sphere at the parent-attachment point (this beam's start).
+        if (i > 0) {
+          const joint = new THREE.Mesh(jointGeom, jointMat);
+          joint.position.copy(start);
+          this.content.add(joint);
+        }
 
-      // Walker hint: sphere offset along walker-up at the beam's start, with
-      // a faint foot dropping orthogonally to the centerline. Surfaces the
-      // section-frame orientation and visually anchors to this beam (not the
-      // parent joint). Suppressed entirely when the editor isn't focused;
-      // green on the editor's current beam, grey otherwise.
-      if (showWalkerHints) {
+        // Walker hint: sphere offset along walker-up at the beam's start with a
+        // faint foot dropping orthogonally to the centerline. Surfaces the
+        // section-frame orientation. Green on the editor's current beam.
         const hintColor = isCurrent ? COLOR_WALKER_HINT_HIGHLIGHT : COLOR_BEAM;
         const upVec = new THREE.Vector3(...b.startFrame.up);
         const fwdOffset = b.length_mm * 0.08;
@@ -161,14 +190,14 @@ export class Scene {
           depthWrite: false,
         });
         this.content.add(new THREE.Line(footGeom, footMat));
-      }
 
-      // Attachment markers along the beam axis.
-      for (const att of b.attachmentOffsets) {
-        const pos = start.clone().add(fwd.clone().multiplyScalar(att.local_mm));
-        const dot = new THREE.Mesh(attachGeom, attachMat);
-        dot.position.copy(pos);
-        this.content.add(dot);
+        // Attachment markers along the beam axis (load locations).
+        for (const att of b.attachmentOffsets) {
+          const pos = start.clone().add(fwd.clone().multiplyScalar(att.local_mm));
+          const dot = new THREE.Mesh(attachGeom, attachMat);
+          dot.position.copy(pos);
+          this.content.add(dot);
+        }
       }
 
       bbox.expandByPoint(start);
@@ -176,6 +205,7 @@ export class Scene {
     }
 
     // Clamp markers on the root beam: start always; end under support(both).
+    // These stay visible in both modes — they denote the world-origin reference.
     if (supportKind) {
       const root = beams[0]!;
       const rStart = new THREE.Vector3(...root.startFrame.origin);
@@ -195,49 +225,142 @@ export class Scene {
     const maxDim = Math.max(size.x, size.y, size.z);
     this.scaleHalf = Math.max(50, maxDim * 0.8 + Math.max(beamRadius * 6, 10));
 
+    const hitRadius = avgL / 25;
+    const labelOffset = avgL / 8;
     if (sim && sim.nodes.length > 0) {
-      this.drawDeformedOverlay(beams, sim, maxDim, attachRadius);
+      this.drawDeflection(beams, sim, maxDim, hitRadius, labelOffset, selectedNodeIx, focused);
     }
 
     this.refresh();
   }
 
-  private drawDeformedOverlay(
-    _beams: BeamNode[],
+  private drawDeflection(
+    beams: BeamNode[],
     sim: SimResult,
     maxDim: number,
-    _attachRadius: number,
+    hitRadius: number,
+    labelOffset: number,
+    selectedNodeIx: number,
+    focused: boolean,
   ): void {
-    const headline = sim.nodes[sim.tipNodeIx];
-    if (!headline) return;
+    const floor = maxDim * LOBE_FLOOR_REL;
+    const ceil = maxDim * LOBE_CEIL_REL;
 
-    const k = sim.display_scale;
+    for (let ix = 0; ix < sim.nodes.length; ix++) {
+      const n = sim.nodes[ix]!;
+      const isSel = ix === selectedNodeIx;
+      const worldPos = new THREE.Vector3(...n.worldPos_undeformed);
 
-    for (const n of sim.nodes) {
-      if (!(n.delta_max_mm > 0)) continue;
-      const surface = buildDirectionalSurface(n.directional, k);
-      surface.position.set(...n.worldPos_undeformed);
-      this.content.add(surface);
+      const outerMax = n.delta_max_mm * sim.display_scale;
+      let state: 'underflow' | 'normal' | 'overflow';
+      if (outerMax < floor) state = 'underflow';
+      else if (outerMax > ceil) state = 'overflow';
+      else state = 'normal';
+
+      const opacity = focused
+        ? 0.15
+        : isSel
+          ? 0.75
+          : state === 'normal' ? 0.25 : 0.45;
+
+      let visual: THREE.Object3D;
+      if (state === 'normal') {
+        visual = buildNormalLobe(n.directional, sim.display_scale, opacity);
+      } else if (state === 'underflow') {
+        visual = buildUnderflowSphere(floor, opacity);
+      } else {
+        visual = buildKonpeito(ceil, opacity);
+      }
+      visual.position.copy(worldPos);
+      this.content.add(visual);
+
+      // Invisible hit-test sphere — generous, fixed radius. visible:false skips
+      // rendering; intersectObjects(pickables, false) still raycasts it.
+      const hit = new THREE.Mesh(
+        new THREE.SphereGeometry(hitRadius, 8, 6),
+        new THREE.MeshBasicMaterial({ visible: false }),
+      );
+      hit.visible = false;
+      hit.position.copy(worldPos);
+      hit.userData['nodeIx'] = ix;
+      this.content.add(hit);
+      this.pickables.push(hit);
+
+      // Floating δ label, offset along the beam's walker-up so the label sits
+      // off the lobe instead of behind it. Hidden when editor has focus.
+      const labelEl = document.createElement('div');
+      labelEl.className = 'scene-label';
+      if (focused) labelEl.classList.add('hidden');
+      if (isSel) labelEl.classList.add('selected');
+      labelEl.textContent = `δ ${formatMm(n.delta_max_mm)}`;
+      this.labelLayer.appendChild(labelEl);
+      const up = new THREE.Vector3(...beams[n.beamIx]!.startFrame.up);
+      const labelPos = worldPos.clone().add(up.multiplyScalar(labelOffset));
+      this.labelEntries.push({ el: labelEl, worldPos: labelPos });
     }
 
-    const headlinePos = new THREE.Vector3(...headline.worldPos_undeformed);
-    const d = new THREE.Vector3(...headline.d_star);
-    const len = headline.delta_max_mm * k;
-    if (len > 1e-6) {
-      const arrow = new THREE.ArrowHelper(
-        d.clone().normalize(),
-        headlinePos,
-        len,
-        COLOR_HEADLINE_ARROW,
-        Math.min(len * 0.4, maxDim * 0.05),
-        Math.min(len * 0.25, maxDim * 0.03),
-      );
-      this.content.add(arrow);
+    // Headline arrow at the selected node — only when not editing.
+    const sel = sim.nodes[selectedNodeIx];
+    if (!focused && sel && sel.delta_max_mm > 0) {
+      const len = sel.delta_max_mm * sim.display_scale;
+      if (len > 1e-6) {
+        const d = new THREE.Vector3(...sel.d_star);
+        const arrow = new THREE.ArrowHelper(
+          d.clone().normalize(),
+          new THREE.Vector3(...sel.worldPos_undeformed),
+          len,
+          COLOR_HEADLINE_ARROW,
+          Math.min(len * 0.4, maxDim * 0.05),
+          Math.min(len * 0.25, maxDim * 0.03),
+        );
+        this.content.add(arrow);
+      }
+    }
+  }
+
+  private clearLabels() {
+    for (const e of this.labelEntries) e.el.remove();
+    this.labelEntries = [];
+  }
+
+  private updateLabels() {
+    if (this.labelEntries.length === 0) return;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+    const v = new THREE.Vector3();
+    for (const e of this.labelEntries) {
+      v.copy(e.worldPos).project(this.camera);
+      const x = (v.x * 0.5 + 0.5) * w;
+      const y = (-v.y * 0.5 + 0.5) * h;
+      e.el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+    }
+  }
+
+  private tryPick(clientX: number, clientY: number): void {
+    if (this.pickables.length === 0) return;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+       ((clientX - rect.left) / rect.width)  * 2 - 1,
+      -((clientY - rect.top)  / rect.height) * 2 + 1,
+    );
+    this.content.updateMatrixWorld(true);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hits = this.raycaster.intersectObjects(this.pickables, false);
+    if (hits.length > 0) {
+      const nodeIx = hits[0]!.object.userData['nodeIx'] as number;
+      this.onPick(nodeIx);
     }
   }
 
   private installDrag(canvas: HTMLCanvasElement) {
+    let downX = 0;
+    let downY = 0;
+
     canvas.addEventListener('pointerdown', (e) => {
+      downX = e.clientX;
+      downY = e.clientY;
+      canvas.focus();
       this.dragging = true;
       this.lastPointerX = e.clientX;
       this.yawVelocity = 0;
@@ -254,10 +377,15 @@ export class Scene {
       this.targetYaw -= dx * YAW_PER_PX;
     });
 
-    const end = () => {
+    const end = (e: PointerEvent) => {
       if (!this.dragging) return;
       this.dragging = false;
       canvas.classList.remove('dragging');
+      const dx = e.clientX - downX;
+      const dy = e.clientY - downY;
+      if (dx * dx + dy * dy < CLICK_MOVE_THRESH_SQ) {
+        this.tryPick(e.clientX, e.clientY);
+      }
     };
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', end);
@@ -299,6 +427,7 @@ export class Scene {
   private refresh() {
     this.updateCamera();
     this.renderer.render(this.root, this.camera);
+    this.updateLabels();
   }
 
   private updateCamera() {
@@ -309,7 +438,6 @@ export class Scene {
     const sy = Math.sin(this.yaw);
     const cy = Math.cos(this.yaw);
     const r = 4 * this.scaleHalf;
-    // Y-up world orbit: yaw around +Y, elev tilts toward +Y.
     this.camera.position.set(
       target.x + r * ce * sy,
       target.y + r * se,
@@ -372,7 +500,7 @@ function disposeChildren(group: THREE.Group) {
 // Wireframe icosphere whose vertices are deformed radially by δ(d) · scale.
 // One mesh per query node visualizes how compliant the joint is in every
 // direction: anisotropic chains produce elongated lobes along their weak axes.
-function buildDirectionalSurface(dir: Directional, scale: number): THREE.Mesh {
+function buildNormalLobe(dir: Directional, scale: number, opacity: number): THREE.Mesh {
   const geom = new THREE.IcosahedronGeometry(1, 3);
   const pos = geom.attributes.position!;
   for (let i = 0; i < pos.count; i++) {
@@ -390,7 +518,47 @@ function buildDirectionalSurface(dir: Directional, scale: number): THREE.Mesh {
     color: COLOR_DEFORMED,
     wireframe: true,
     transparent: true,
-    opacity: 0.5,
+    opacity,
+  });
+  return new THREE.Mesh(geom, mat);
+}
+
+// Solid orange sphere at the floor radius — "deflection here is too tight to
+// draw a meaningful lobe; see the label for the number."
+function buildUnderflowSphere(floor: number, opacity: number): THREE.Mesh {
+  const geom = new THREE.SphereGeometry(floor, 12, 8);
+  const mat = new THREE.MeshBasicMaterial({
+    color: COLOR_DEFORMED,
+    transparent: true,
+    opacity,
+    depthWrite: false,
+  });
+  return new THREE.Mesh(geom, mat);
+}
+
+// Konpeito-ish red spiky sphere at the ceiling radius — "deflection here would
+// be off-scale; clipping for display, see the label for the real number."
+// Cute angriness, not a screaming error.
+function buildKonpeito(ceil: number, opacity: number): THREE.Mesh {
+  const geom = new THREE.IcosahedronGeometry(ceil, 1);
+  const pos = geom.attributes.position!;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    // Deterministic per-vertex scalar in [1.0, 1.4] via sin-hash.
+    const seed = Math.abs(Math.sin(i * 12.9898) * 43758.5453);
+    const r = 1.0 + (seed - Math.floor(seed)) * 0.4;
+    pos.setXYZ(i, x * r, y * r, z * r);
+  }
+  pos.needsUpdate = true;
+  geom.computeVertexNormals();
+  geom.computeBoundingSphere();
+  const mat = new THREE.MeshBasicMaterial({
+    color: COLOR_DEFORMED_OVERFLOW,
+    transparent: true,
+    opacity,
+    depthWrite: false,
   });
   return new THREE.Mesh(geom, mat);
 }

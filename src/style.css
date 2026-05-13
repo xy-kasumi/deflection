@@ -176,3 +176,30 @@ html, body {
 }
 
 #canvas.dragging { cursor: grabbing; }
+
+.scene-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.scene-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font: 11px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  color: #5a5a5a;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.scene-label.selected {
+  color: #1f2328;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.scene-label.hidden { display: none; }
