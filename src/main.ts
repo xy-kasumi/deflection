@@ -1,6 +1,6 @@
 import { Editor } from './editor';
 import { Scene } from './scene';
-import { parse } from './dsl/parse';
+import { parse, type BeamDef } from './dsl/parse';
 import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
 import { runSim, type DisplayScale } from './sim/run';
@@ -22,18 +22,34 @@ const scene = new Scene(canvas);
 
 let currentScale: DisplayScale = 1;
 let lastSrc = INITIAL_SRC;
+let cursorOffset = 0;
+let editorFocused = false;
 
-function render(src: string) {
-  lastSrc = src;
-  const { structure, diagnostics: pd } = parse(src);
+function render() {
+  const { structure, diagnostics: pd } = parse(lastSrc);
   const sd = semcheck(structure);
   const { beams, diagnostics: wd } = walk(structure);
   const sim = runSim(beams, structure);
   sim.display_scale = currentScale;
   editor.setDiagnostics([...pd, ...sd, ...wd, ...sim.diagnostics]);
-  scene.update(beams, sim, getSupportKind(structure));
+
+  const currentBeamIx = editorFocused
+    ? findBeamAtOffset(structure.beams, cursorOffset)
+    : null;
+  scene.update(beams, sim, getSupportKind(structure), {
+    currentBeamIx,
+    focused: editorFocused,
+  });
   renderReadout(infoEl, sim);
   updateScaleButtons();
+}
+
+function findBeamAtOffset(defs: BeamDef[], offset: number): number | null {
+  for (let i = 0; i < defs.length; i++) {
+    const { start, end } = defs[i]!.span;
+    if (offset >= start && offset <= end) return i;
+  }
+  return null;
 }
 
 function updateScaleButtons() {
@@ -49,9 +65,21 @@ scaleOverlayEl.addEventListener('click', (e) => {
   const s = Number(btn.dataset['scale']) as DisplayScale;
   if (s === currentScale) return;
   currentScale = s;
-  render(lastSrc);
+  render();
 });
 
-const editor = new Editor(editorEl, INITIAL_SRC, render);
+const editor = new Editor(
+  editorEl,
+  INITIAL_SRC,
+  (src) => {
+    lastSrc = src;
+    render();
+  },
+  ({ offset, focused }) => {
+    cursorOffset = offset;
+    editorFocused = focused;
+    render();
+  },
+);
 
-render(INITIAL_SRC);
+render();

@@ -10,11 +10,12 @@ const COLOR_BG = 0xffffff;
 const COLOR_JOINT = 0x444b53;
 const COLOR_CLAMP = 0x444b53;
 const COLOR_ATTACHMENT = 0xd97a1a;
-const COLOR_UP_MARKER = 0x2e7d32;
+const COLOR_WALKER_HINT_HIGHLIGHT = 0x2e7d32;
 const COLOR_DEFORMED = 0xd97a1a;
 const COLOR_HEADLINE_ARROW = 0xd62828;
 
 const COLOR_BEAM = 0x9aa0a6;
+const COLOR_BEAM_HIGHLIGHT = 0x2563eb;
 
 // Drag tuning: time-constants of the input low-pass and post-release decay.
 const SMOOTH_K = 18;
@@ -59,7 +60,12 @@ export class Scene {
     this.installDrag(canvas);
   }
 
-  update(beams: BeamNode[], sim?: SimResult, supportKind?: 'single' | 'both'): void {
+  update(
+    beams: BeamNode[],
+    sim?: SimResult,
+    supportKind?: 'single' | 'both',
+    editor?: { currentBeamIx: number | null; focused: boolean },
+  ): void {
     disposeChildren(this.content);
 
     if (beams.length === 0) {
@@ -79,21 +85,14 @@ export class Scene {
     const jointGeom = new THREE.SphereGeometry(jointRadius, 12, 8);
     const clampGeom = new THREE.BoxGeometry(clampHalf * 2, clampHalf * 2, clampHalf * 2);
     const attachGeom = new THREE.SphereGeometry(attachRadius, 10, 6);
-    const upMarkerGeom = new THREE.SphereGeometry(attachRadius * 0.9, 10, 6);
     const jointMat = new THREE.MeshBasicMaterial({ color: COLOR_JOINT });
     const clampMat = new THREE.MeshBasicMaterial({ color: COLOR_CLAMP });
     const attachMat = new THREE.MeshBasicMaterial({ color: COLOR_ATTACHMENT });
-    const upMat = new THREE.MeshBasicMaterial({ color: COLOR_UP_MARKER });
-    const upLineMat = new THREE.LineBasicMaterial({
-      color: COLOR_UP_MARKER,
-      transparent: true,
-      opacity: 0.35,
-      depthWrite: false,
-    });
-    // Up-marker is offset away from the joint along both walker-up (so the
-    // section orientation is visible) and walker-fwd (so it's unambiguously
-    // associated with this beam, not the parent's end joint).
-    const upOffset = avgL / 8;
+    // Walker hint is offset along both walker-up (so the section orientation
+    // is visible) and walker-fwd (so it's unambiguously associated with this
+    // beam, not the parent's end joint).
+    const walkerHintOffset = avgL / 8;
+    const showWalkerHints = editor?.focused === true;
 
     const bbox = new THREE.Box3();
     bbox.makeEmpty();
@@ -103,17 +102,22 @@ export class Scene {
       const start = new THREE.Vector3(...b.startFrame.origin);
       const fwd = new THREE.Vector3(...b.startFrame.fwd);
       const end = start.clone().add(fwd.clone().multiplyScalar(b.length_mm));
+      const isCurrent = showWalkerHints && editor!.currentBeamIx === i;
 
-      const cyl = new THREE.CylinderGeometry(beamRadius, beamRadius, b.length_mm, 16, 1, true);
-      // Default cylinder is along +Y; rotate to align with beam +fwd, then translate.
-      cyl.translate(0, b.length_mm / 2, 0);
+      // Capsule = cylinder + hemispherical end caps in one geometry. `length`
+      // is the cylinder portion; trim it by 2r so the visual span (caps
+      // included) matches b.length_mm exactly. Local axis is +Y; rotate to
+      // align with beam +fwd, then translate.
+      const cylPart = Math.max(beamRadius * 0.01, b.length_mm - 2 * beamRadius);
+      const geom = new THREE.CapsuleGeometry(beamRadius, cylPart, 6, 16);
+      geom.translate(0, b.length_mm / 2, 0);
       const beamMat = new THREE.MeshBasicMaterial({
-        color: COLOR_BEAM,
+        color: isCurrent ? COLOR_BEAM_HIGHLIGHT : COLOR_BEAM,
         transparent: true,
         opacity: 0.32,
         depthWrite: false,
       });
-      const mesh = new THREE.Mesh(cyl, beamMat);
+      const mesh = new THREE.Mesh(geom, beamMat);
       mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), fwd);
       mesh.position.copy(start);
       this.content.add(mesh);
@@ -125,27 +129,39 @@ export class Scene {
         this.content.add(joint);
       }
 
-      // Local-up marker: small green sphere offset along walker-up at the
-      // beam's start. Makes the section-frame orientation visible and
-      // assigns visual ownership to this beam (not the parent joint).
-      // A faint line tethers it to the start joint to make the link explicit.
-      const upVec = new THREE.Vector3(...b.startFrame.up);
-      const fwdOffset = b.length_mm * 0.08;
-      const upMarker = new THREE.Mesh(upMarkerGeom, upMat);
-      upMarker.position
-        .copy(start)
-        .add(fwd.clone().multiplyScalar(fwdOffset))
-        .add(upVec.clone().multiplyScalar(upOffset));
-      this.content.add(upMarker);
+      // Walker hint: sphere offset along walker-up at the beam's start, with
+      // a faint foot dropping orthogonally to the centerline. Surfaces the
+      // section-frame orientation and visually anchors to this beam (not the
+      // parent joint). Suppressed entirely when the editor isn't focused;
+      // green on the editor's current beam, grey otherwise.
+      if (showWalkerHints) {
+        const hintColor = isCurrent ? COLOR_WALKER_HINT_HIGHLIGHT : COLOR_BEAM;
+        const upVec = new THREE.Vector3(...b.startFrame.up);
+        const fwdOffset = b.length_mm * 0.08;
+        const walkerHintGeom = new THREE.SphereGeometry(attachRadius * 0.9, 10, 6);
+        const walkerHint = new THREE.Mesh(
+          walkerHintGeom,
+          new THREE.MeshBasicMaterial({ color: hintColor }),
+        );
+        walkerHint.position
+          .copy(start)
+          .add(fwd.clone().multiplyScalar(fwdOffset))
+          .add(upVec.clone().multiplyScalar(walkerHintOffset));
+        this.content.add(walkerHint);
 
-      // Tether is orthogonal to the beam: from a point on the centerline at
-      // the marker's fwd-offset, straight along walker-up to the marker.
-      const tetherFoot = start.clone().add(fwd.clone().multiplyScalar(fwdOffset));
-      const tetherGeom = new THREE.BufferGeometry().setFromPoints([
-        tetherFoot,
-        upMarker.position.clone(),
-      ]);
-      this.content.add(new THREE.Line(tetherGeom, upLineMat));
+        const footAnchor = start.clone().add(fwd.clone().multiplyScalar(fwdOffset));
+        const footGeom = new THREE.BufferGeometry().setFromPoints([
+          footAnchor,
+          walkerHint.position.clone(),
+        ]);
+        const footMat = new THREE.LineBasicMaterial({
+          color: hintColor,
+          transparent: true,
+          opacity: 0.35,
+          depthWrite: false,
+        });
+        this.content.add(new THREE.Line(footGeom, footMat));
+      }
 
       // Attachment markers along the beam axis.
       for (const att of b.attachmentOffsets) {

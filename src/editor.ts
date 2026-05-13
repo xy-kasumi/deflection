@@ -21,6 +21,7 @@ export class Editor {
     parent: HTMLElement,
     initialSrc: string,
     onChange: (src: string) => void,
+    onSelection: (state: { offset: number; focused: boolean }) => void,
   ) {
     const fire = debounce(() => onChange(this.view.state.doc.toString()), 150);
 
@@ -35,6 +36,15 @@ export class Editor {
           // so no upfront linter() extension is needed.
           EditorView.updateListener.of((u) => {
             if (u.docChanged) fire();
+            // Doc edits move the cursor implicitly without flipping
+            // `selectionSet`, so include `docChanged` to keep selection
+            // reports in sync.
+            if (u.selectionSet || u.focusChanged || u.docChanged) {
+              onSelection({
+                offset: u.state.selection.main.head,
+                focused: u.view.hasFocus,
+              });
+            }
           }),
         ],
       }),
