@@ -83,6 +83,10 @@ const LOBE_CEIL_AREA_FRAC = 0.075;
 // itself. Past the threshold the new state is fully on.
 const LOBE_UNDER_BLEND_LO = 0.7;
 const LOBE_OVER_BLEND_LO  = 0.85;
+// Konpeito is a compact hint, not the "real" lobe size — keep it small enough
+// to not occlude nearby beams or other lobes. The trigger and the normal-lobe
+// clamp both stay at lobeCeilWorld; only the rendered konpeito is halved.
+const LOBE_KONPEITO_FRAC  = 0.5;
 
 const deg = (d: number) => (d * Math.PI) / 180;
 
@@ -441,7 +445,7 @@ export class Scene {
         ? Math.min(scale, lobeCeilWorld / a.delta_max_mm)
         : scale;
       a.normal.scale.setScalar(normalScale);
-      a.over.scale.setScalar(lobeCeilWorld);
+      a.over.scale.setScalar(lobeCeilWorld * LOBE_KONPEITO_FRAC);
       // under mesh built at world radius lobeFloor; no per-frame scaling.
 
       const normalOpacity = a.normalBase * (1 - aUnder) * (1 - aOver);
