@@ -3,17 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Deflection</title>
+    <title>deflection</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <div id="app">
       <aside id="editor-panel">
         <div id="editor"></div>
-        <div id="readout"></div>
+        <div id="info"></div>
       </aside>
       <main id="canvas-panel">
         <canvas id="canvas"></canvas>
+        <div id="scale-overlay">
+          <span class="label">δ exaggeration</span>
+          <div class="buttons">
+            <button type="button" data-scale="1">×1</button>
+            <button type="button" data-scale="10">×10</button>
+            <button type="button" data-scale="100">×100</button>
+            <button type="button" data-scale="1000">×1000</button>
+          </div>
+        </div>
       </main>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from './walker';
-import type { SimResult, DisplayScale } from './sim/run';
+import type { SimResult } from './sim/run';
 
 const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
@@ -12,8 +12,6 @@ const COLOR_ATTACHMENT = 0xd97a1a;
 const COLOR_UP_MARKER = 0x2e7d32;
 const COLOR_DEFORMED = 0xd97a1a;
 const COLOR_TIP_ARROW = 0xd62828;
-
-const SCALE_LADDER: DisplayScale[] = [1, 10, 100, 1000, 10000];
 
 const MATERIAL_COLORS: Record<string, number> = {
   plastic: 0xc7b56b,
@@ -183,20 +181,6 @@ export class Scene {
     this.refresh();
   }
 
-  // Decide a display scale that makes the deformation visible without being
-  // absurd: pick the largest scale where (scale · δ_max) is at most ~20% of
-  // the chain's longest dimension.
-  static chooseDisplayScale(delta_max_mm: number, chain_max_dim_mm: number): DisplayScale {
-    if (!(delta_max_mm > 0) || !(chain_max_dim_mm > 0)) return 1;
-    const cap = chain_max_dim_mm * 0.2;
-    let chosen: DisplayScale = 1;
-    for (const s of SCALE_LADDER) {
-      if (s * delta_max_mm <= cap) chosen = s;
-      else break;
-    }
-    return chosen;
-  }
-
   private drawDeformedOverlay(
     beams: BeamNode[],
     sim: SimResult,
@@ -206,7 +190,6 @@ export class Scene {
     const tipNode = sim.nodes[sim.tipQueryIx];
     if (!tipNode) return;
 
-    sim.display_scale = Scene.chooseDisplayScale(tipNode.delta_max_mm, maxDim);
     const k = sim.display_scale;
 
     // Build deformed positions per query node, indexed by beamIx so we can

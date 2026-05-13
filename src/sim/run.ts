@@ -32,7 +32,7 @@ export interface SimBeam {
   torsion_fraction: number;
 }
 
-export type DisplayScale = 1 | 10 | 100 | 1000 | 10000;
+export type DisplayScale = 1 | 10 | 100 | 1000;
 
 export interface SimResult {
   nodes: NodeDeflectionResult[];

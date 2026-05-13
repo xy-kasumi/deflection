@@ -31,9 +31,9 @@ html, body {
   overflow: hidden;
 }
 
-#readout {
-  flex: 0 0 auto;
-  max-height: 45%;
+#info {
+  flex: 2 1 0;
+  min-height: 0;
   overflow-y: auto;
   border-top: 1px solid #d8dce2;
   padding: 10px 12px;
@@ -45,46 +45,41 @@ html, body {
   white-space: pre-wrap;
 }
 
-#readout .ro-headline {
+#info .ro-headline {
   font-weight: 600;
   margin-bottom: 6px;
   color: #1f2328;
 }
 
-#readout .ro-scale {
-  color: #6a737d;
-  margin-left: 6px;
-}
-
-#readout .ro-section {
+#info .ro-section {
   margin-top: 8px;
   color: #6a737d;
 }
 
-#readout .ro-row {
+#info .ro-row {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 6px;
   color: #1f2328;
 }
 
-#readout .ro-row .frac {
+#info .ro-row .frac {
   color: #6a737d;
 }
 
-#readout .ro-bar {
+#info .ro-bar {
   display: inline-block;
   height: 6px;
   border-radius: 2px;
   margin-right: 6px;
   vertical-align: middle;
 }
-#readout .ro-bar.ax  { background: #6a737d; }
-#readout .ro-bar.bx  { background: #2e7d32; }
-#readout .ro-bar.by  { background: #2563eb; }
-#readout .ro-bar.tor { background: #d97a1a; }
+#info .ro-bar.ax  { background: #6a737d; }
+#info .ro-bar.bx  { background: #2e7d32; }
+#info .ro-bar.by  { background: #2563eb; }
+#info .ro-bar.tor { background: #d97a1a; }
 
-#readout .ro-empty { color: #8a929a; font-style: italic; }
+#info .ro-empty { color: #8a929a; font-style: italic; }
 
 /* CodeMirror tuning */
 .cm-editor {
@@ -121,6 +116,54 @@ html, body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
+}
+
+#scale-overlay {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #d8dce2;
+  border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+#scale-overlay .label {
+  color: #6a737d;
+  font-size: 11px;
+}
+
+#scale-overlay .buttons {
+  display: flex;
+  gap: 4px;
+}
+
+#scale-overlay button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: #1f2328;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+#scale-overlay button:hover {
+  background: #eef0f3;
+}
+
+#scale-overlay button.active {
+  background: #1f2328;
+  color: #ffffff;
+  border-color: #1f2328;
 }
 
 #canvas {

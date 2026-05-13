@@ -15,14 +15,9 @@ export function renderReadout(el: HTMLElement, sim: SimResult): void {
   const tip = sim.nodes[sim.tipQueryIx];
   if (!tip) return;
 
-  // Headline: δ tip ≈ value with display scale
   const headline = document.createElement('div');
   headline.className = 'ro-headline';
   headline.textContent = `δ tip ≈ ${formatMm(tip.delta_max_mm)}`;
-  const scale = document.createElement('span');
-  scale.className = 'ro-scale';
-  scale.textContent = `×${sim.display_scale}`;
-  headline.appendChild(scale);
   el.appendChild(headline);
 
   // Forces section.
