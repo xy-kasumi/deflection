@@ -8,6 +8,7 @@ import { getSupportKind } from './sim/compliance';
 import { renderReadout } from './readout';
 
 const INITIAL_SRC = `support(single)
+mass_accel(2G)
 horz beam(steel rect(W10 H10) L300)
 mid: right beam(aluminum rect(W10 H10) L150)
 down beam(plastic rect(W10 H10) L100) end:force(1kgf)
