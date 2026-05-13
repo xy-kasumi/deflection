@@ -7,19 +7,14 @@ const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
 
 const COLOR_BG = 0xffffff;
-const COLOR_AXIS = 0xd0d7de;
 const COLOR_JOINT = 0x444b53;
+const COLOR_CLAMP = 0x444b53;
 const COLOR_ATTACHMENT = 0xd97a1a;
 const COLOR_UP_MARKER = 0x2e7d32;
 const COLOR_DEFORMED = 0xd97a1a;
 const COLOR_HEADLINE_ARROW = 0xd62828;
 
-const MATERIAL_COLORS: Record<string, number> = {
-  plastic: 0xc7b56b,
-  aluminum: 0x8693a3,
-  steel: 0x3b6db5,
-};
-const COLOR_BEAM_DEFAULT = 0x9aa0a6;
+const COLOR_BEAM = 0x9aa0a6;
 
 // Drag tuning: time-constants of the input low-pass and post-release decay.
 const SMOOTH_K = 18;
@@ -34,7 +29,6 @@ export class Scene {
   private root: THREE.Scene;
   private camera: THREE.OrthographicCamera;
   private content: THREE.Group;
-  private axes: THREE.Group;
   private yaw: number;
   private pitch: number;
   private targetYaw: number;
@@ -54,9 +48,7 @@ export class Scene {
     this.root.background = new THREE.Color(COLOR_BG);
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10000, 10000);
     this.content = new THREE.Group();
-    this.axes = new THREE.Group();
     this.root.add(this.content);
-    this.root.add(this.axes);
     this.yaw = deg(ISO_YAW_DEG);
     this.pitch = deg(ISO_PITCH_DEG);
     this.targetYaw = this.yaw;
@@ -67,9 +59,8 @@ export class Scene {
     this.installDrag(canvas);
   }
 
-  update(beams: BeamNode[], sim?: SimResult): void {
+  update(beams: BeamNode[], sim?: SimResult, supportKind?: 'single' | 'both'): void {
     disposeChildren(this.content);
-    disposeChildren(this.axes);
 
     if (beams.length === 0) {
       this.center.set(0, 0, 0);
@@ -83,11 +74,14 @@ export class Scene {
     const beamRadius = Math.max(0.5, avgL / 80);
     const jointRadius = Math.max(0.8, avgL / 40);
     const attachRadius = Math.max(0.6, avgL / 50);
+    const clampHalf = jointRadius * 1.1;
 
     const jointGeom = new THREE.SphereGeometry(jointRadius, 12, 8);
+    const clampGeom = new THREE.BoxGeometry(clampHalf * 2, clampHalf * 2, clampHalf * 2);
     const attachGeom = new THREE.SphereGeometry(attachRadius, 10, 6);
     const upMarkerGeom = new THREE.SphereGeometry(attachRadius * 0.9, 10, 6);
     const jointMat = new THREE.MeshBasicMaterial({ color: COLOR_JOINT });
+    const clampMat = new THREE.MeshBasicMaterial({ color: COLOR_CLAMP });
     const attachMat = new THREE.MeshBasicMaterial({ color: COLOR_ATTACHMENT });
     const upMat = new THREE.MeshBasicMaterial({ color: COLOR_UP_MARKER });
     const upLineMat = new THREE.LineBasicMaterial({
@@ -104,11 +98,8 @@ export class Scene {
     const bbox = new THREE.Box3();
     bbox.makeEmpty();
 
-    for (const b of beams) {
-      const matColor = b.material && MATERIAL_COLORS[b.material]
-        ? MATERIAL_COLORS[b.material]
-        : COLOR_BEAM_DEFAULT;
-
+    for (let i = 0; i < beams.length; i++) {
+      const b = beams[i]!;
       const start = new THREE.Vector3(...b.startFrame.origin);
       const fwd = new THREE.Vector3(...b.startFrame.fwd);
       const end = start.clone().add(fwd.clone().multiplyScalar(b.length_mm));
@@ -117,7 +108,7 @@ export class Scene {
       // Default cylinder is along +Y; rotate to align with beam +fwd, then translate.
       cyl.translate(0, b.length_mm / 2, 0);
       const beamMat = new THREE.MeshBasicMaterial({
-        color: matColor,
+        color: COLOR_BEAM,
         transparent: true,
         opacity: 0.32,
         depthWrite: false,
@@ -127,13 +118,12 @@ export class Scene {
       mesh.position.copy(start);
       this.content.add(mesh);
 
-      // Joint dots at start and end.
-      const startDot = new THREE.Mesh(jointGeom, jointMat);
-      startDot.position.copy(start);
-      this.content.add(startDot);
-      const endDot = new THREE.Mesh(jointGeom, jointMat);
-      endDot.position.copy(end);
-      this.content.add(endDot);
+      // Non-root beams: sphere at the parent-attachment point (this beam's start).
+      if (i > 0) {
+        const joint = new THREE.Mesh(jointGeom, jointMat);
+        joint.position.copy(start);
+        this.content.add(joint);
+      }
 
       // Local-up marker: small green sphere offset along walker-up at the
       // beam's start. Makes the section-frame orientation visible and
@@ -169,6 +159,21 @@ export class Scene {
       bbox.expandByPoint(end);
     }
 
+    // Clamp markers on the root beam: start always; end under support(both).
+    if (supportKind) {
+      const root = beams[0]!;
+      const rStart = new THREE.Vector3(...root.startFrame.origin);
+      const rFwd = new THREE.Vector3(...root.startFrame.fwd);
+      const startClamp = new THREE.Mesh(clampGeom, clampMat);
+      startClamp.position.copy(rStart);
+      this.content.add(startClamp);
+      if (supportKind === 'both') {
+        const endClamp = new THREE.Mesh(clampGeom, clampMat);
+        endClamp.position.copy(rStart).add(rFwd.multiplyScalar(root.length_mm));
+        this.content.add(endClamp);
+      }
+    }
+
     bbox.getCenter(this.center);
     const size = bbox.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
@@ -178,7 +183,6 @@ export class Scene {
       this.drawDeformedOverlay(beams, sim, maxDim, attachRadius);
     }
 
-    this.rebuildAxes(bbox);
     this.refresh();
   }
 
@@ -214,20 +218,6 @@ export class Scene {
       );
       this.content.add(arrow);
     }
-  }
-
-  private rebuildAxes(bbox: THREE.Box3): void {
-    const mat = new THREE.LineBasicMaterial({ color: COLOR_AXIS });
-    const min = bbox.min;
-    const max = bbox.max;
-    const pad = Math.max(10, (max.x - min.x) * 0.1);
-    const positions = new Float32Array([
-      min.x - pad, 0, 0,
-      max.x + pad, 0, 0,
-    ]);
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    this.axes.add(new THREE.Line(geom, mat));
   }
 
   private installDrag(canvas: HTMLCanvasElement) {

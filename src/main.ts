@@ -4,6 +4,7 @@ import { parse } from './dsl/parse';
 import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
 import { runSim, type DisplayScale } from './sim/run';
+import { getSupportKind } from './sim/compliance';
 import { renderReadout } from './readout';
 
 const INITIAL_SRC = `support(single)
@@ -30,7 +31,7 @@ function render(src: string) {
   const sim = runSim(beams, structure);
   sim.display_scale = currentScale;
   editor.setDiagnostics([...pd, ...sd, ...wd, ...sim.diagnostics]);
-  scene.update(beams, sim);
+  scene.update(beams, sim, getSupportKind(structure));
   renderReadout(infoEl, sim);
   updateScaleButtons();
 }
