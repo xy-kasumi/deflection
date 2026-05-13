@@ -3,20 +3,10 @@ import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/run';
 import type { Directional } from '../sim/directional';
 import { formatMm } from '../readout';
+import { COLOR, VU, MOTION, hexToVec3 } from './tokens';
 
 const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
-
-const COLOR_BG = 0xffffff;
-const COLOR_JOINT = 0x444b53;
-const COLOR_CLAMP = 0x444b53;
-const COLOR_ATTACHMENT = 0xd97a1a;
-const COLOR_WALKER_HINT_HIGHLIGHT = 0x2e7d32;
-const COLOR_DEFORMED = 0xd97a1a;          // orange — deflection family (shell + underflow)
-const COLOR_DEFORMED_PEAK = 0xc62828;     // red — peak cap on the normal lobe + overflow
-
-const COLOR_BEAM = 0x9aa0a6;
-const COLOR_BEAM_HIGHLIGHT = 0x2563eb;
 
 // Normal-lobe rendering. Filled mesh with per-vertex t = δ/δ_max. The fragment
 // shader paints a faint orange shell below t = CAP_LO and an opaque red cap
@@ -50,8 +40,8 @@ void main() {
   float t = clamp(vT, 0.0, 1.0);
   float wT = fwidth(t);
   float capAlpha = smoothstep(${LOBE_CAP_LO} - wT, ${LOBE_CAP_LO} + wT, t);
-  vec3 shellCol = vec3(0.85, 0.48, 0.10);
-  vec3 capCol   = vec3(0.78, 0.16, 0.16);
+  vec3 shellCol = ${hexToVec3(COLOR.deformed)};
+  vec3 capCol   = ${hexToVec3(COLOR.deformedPeak)};
   vec3 col = mix(shellCol, capCol, capAlpha);
   float a = mix(${LOBE_SHELL_ALPHA}, 1.0, capAlpha) * alphaMul;
   gl_FragColor = vec4(col, a);
@@ -60,18 +50,8 @@ void main() {
 
 // Click vs drag: pointerup with movement below this threshold (squared, px) is a click.
 const CLICK_MOVE_THRESH_SQ = 16;
-
-// Drag tuning: time-constants of the input low-pass and post-release decay.
-const SMOOTH_K = 18;
-const DECAY_K = 16;
-const STOP_VEL = 0.1;
 const YAW_PER_PX = 1 / 150;
 
-// δ-exag animation. Log-space ease toward target; SCALE_K ≈ 18 gives ~250ms
-// perceived settling so the button feels responsive but the lobes glide
-// instead of snapping. Settled tolerance is in log units.
-const SCALE_K = 18;
-const SCALE_SETTLE_LOG = 1e-3;
 // The button set; also the candidate set for auto-pick on node selection.
 // Kept in ascending order so the recommend-scale loop can pick the largest
 // non-overflown by iterating once.
@@ -150,7 +130,7 @@ export class Scene {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.root = new THREE.Scene();
-    this.root.background = new THREE.Color(COLOR_BG);
+    this.root.background = new THREE.Color(COLOR.bg);
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10000, 10000);
     this.content = new THREE.Group();
     this.root.add(this.content);
@@ -203,24 +183,24 @@ export class Scene {
     const avgL = beams.reduce((s, b) => s + b.length_mm, 0) / beams.length;
     const u = Math.max(1, avgL / 40);
 
-    const rodR    = u / 2;          // rod dia = 1u
-    const jointR  = u;              // joint dia = 2u — twice as fat as the rod
-    const attachR = u * 0.75;       // attach dia = 1.5u — smaller marker for loads
-    const clampHalf = u * 1.1;      // clamp side = 2.2u — just wider than the joint
-    const hitRadius = u * 3;        // hit dia = 6u — generous, also reaches the label
+    const rodR     = u * VU.rodR;
+    const jointR   = u * VU.jointR;
+    const attachR  = u * VU.attachR;
+    const clampHalf = u * VU.clampHalf;
+    const hitRadius = u * VU.hitR;
 
-    const walkerHintOffset = u * 5; // 5u off the rod
-    const labelOffset      = u * 5;
+    const walkerHintOffset = u * VU.walkerHintOffset;
+    const labelOffset      = u * VU.labelOffset;
 
-    const lobeFloor = u * 0.75;     // underflow dia = 1.5u — just edges past the rod
+    const lobeFloor = u * VU.lobeFloorR;
     this.lobeFloor = lobeFloor;
 
     const jointGeom = new THREE.SphereGeometry(jointR, 12, 8);
     const clampGeom = new THREE.BoxGeometry(clampHalf * 2, clampHalf * 2, clampHalf * 2);
     const attachGeom = new THREE.SphereGeometry(attachR, 10, 6);
-    const jointMat = new THREE.MeshBasicMaterial({ color: COLOR_JOINT });
-    const clampMat = new THREE.MeshBasicMaterial({ color: COLOR_CLAMP });
-    const attachMat = new THREE.MeshBasicMaterial({ color: COLOR_ATTACHMENT });
+    const jointMat = new THREE.MeshBasicMaterial({ color: COLOR.joint });
+    const clampMat = new THREE.MeshBasicMaterial({ color: COLOR.clamp });
+    const attachMat = new THREE.MeshBasicMaterial({ color: COLOR.attachment });
 
     const bbox = new THREE.Box3();
     bbox.makeEmpty();
@@ -239,7 +219,7 @@ export class Scene {
       const geom = new THREE.CapsuleGeometry(rodR, cylPart, 6, 16);
       geom.translate(0, b.length_mm / 2, 0);
       const beamMat = new THREE.MeshBasicMaterial({
-        color: isCurrent ? COLOR_BEAM_HIGHLIGHT : COLOR_BEAM,
+        color: isCurrent ? COLOR.beamCurrent : COLOR.beam,
         transparent: true,
         opacity: 0.32,
         depthWrite: false,
@@ -262,7 +242,7 @@ export class Scene {
         // Walker hint: sphere offset along walker-up at the beam's start with a
         // faint foot dropping orthogonally to the centerline. Surfaces the
         // section-frame orientation. Green on the editor's current beam.
-        const hintColor = isCurrent ? COLOR_WALKER_HINT_HIGHLIGHT : COLOR_BEAM;
+        const hintColor = isCurrent ? COLOR.walkerHintCurrent : COLOR.beam;
         const upVec = new THREE.Vector3(...b.startFrame.up);
         const fwdOffset = b.length_mm * 0.08;
         const walkerHintGeom = new THREE.SphereGeometry(attachR * 0.9, 10, 6);
@@ -558,14 +538,14 @@ export class Scene {
 
       if (this.dragging) {
         const prevYaw = this.yaw;
-        const alpha = 1 - Math.exp(-dt * SMOOTH_K);
+        const alpha = 1 - Math.exp(-dt * MOTION.dragSmoothK);
         this.yaw += (this.targetYaw - this.yaw) * alpha;
         this.yawVelocity = (this.yaw - prevYaw) / Math.max(dt, 1e-3);
       } else {
         this.yaw += this.yawVelocity * dt;
         this.targetYaw = this.yaw;
-        this.yawVelocity *= Math.exp(-dt * DECAY_K);
-        if (Math.abs(this.yawVelocity) < STOP_VEL) this.yawVelocity = 0;
+        this.yawVelocity *= Math.exp(-dt * MOTION.dragDecayK);
+        if (Math.abs(this.yawVelocity) < MOTION.dragStopVel) this.yawVelocity = 0;
       }
 
       // Log-space ease toward the target δ-exag. Geometric steps (×1→×10→×100)
@@ -573,8 +553,8 @@ export class Scene {
       const logT = Math.log(this.displayScale_target);
       const logC = Math.log(this.displayScale_anim);
       let scaleSettled = true;
-      if (Math.abs(logT - logC) > SCALE_SETTLE_LOG) {
-        const alpha = 1 - Math.exp(-dt * SCALE_K);
+      if (Math.abs(logT - logC) > MOTION.scaleSettleLog) {
+        const alpha = 1 - Math.exp(-dt * MOTION.scaleK);
         this.displayScale_anim = Math.exp(logC + (logT - logC) * alpha);
         scaleSettled = false;
       } else if (this.displayScale_anim !== this.displayScale_target) {
@@ -716,7 +696,7 @@ function buildNormalLobe(dir: Directional): { mesh: THREE.Mesh; isShader: boolea
     // shader applies; the per-frame tick multiplies it through the opacity
     // crossfade by writing the material's opacity directly.
     const mat = new THREE.MeshBasicMaterial({
-      color: COLOR_DEFORMED,
+      color: COLOR.deformed,
       transparent: true,
       opacity: LOBE_SHELL_ALPHA,
       depthWrite: false,
@@ -742,7 +722,7 @@ function buildNormalLobe(dir: Directional): { mesh: THREE.Mesh; isShader: boolea
 function buildUnderflowSphere(floor: number): THREE.Mesh {
   const geom = new THREE.SphereGeometry(floor, 12, 8);
   const mat = new THREE.MeshBasicMaterial({
-    color: COLOR_DEFORMED,
+    color: COLOR.deformed,
     transparent: true,
     opacity: 1,
     depthWrite: false,
@@ -770,7 +750,7 @@ function buildKonpeito(): THREE.Mesh {
   geom.computeVertexNormals();
   geom.computeBoundingSphere();
   const mat = new THREE.MeshBasicMaterial({
-    color: COLOR_DEFORMED_PEAK,
+    color: COLOR.deformedPeak,
     transparent: true,
     opacity: 1,
     depthWrite: false,
