@@ -25,7 +25,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 // (compliance, not the F-weighted result) and check (1,1) entry:
 //   u_y / F_y = L³ / (3·E·Ix)
 {
-  const src = 'support(single)\nhorz beam(steel rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:force(1kgf)';
   const { structure, diagnostics: pd } = parse(src);
   if (pd.some((d) => d.severity === 'error')) {
     console.log('parse diagnostics:', pd);
@@ -123,7 +123,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 // contributes bend-Ix Y-deflection L³/(3·E·Ix), and beam1 contributes axial
 // L/(E·A) → tip total u_y = L³/(3·E·Ix) + L/(E·A).
 {
-  const src = 'support(single)\nhorz beam(steel rect(W10 H10) L100)\nup beam(steel rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100)\nup beam(steel rect(W10 H10) L100) end:force(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);
@@ -178,7 +178,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 // these are 2e-3 (×2) and 5e-6 (×1) — so δ_max = F·L³/(3·E·Ix) and d* should
 // be in the Y-Z plane (any direction there gives the same value).
 {
-  const src = 'support(single)\nhorz beam(steel rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:force(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);
@@ -219,7 +219,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 //   - 1 load, fraction 1.0
 //   - 1 beam, total 1.0; bendIx_fraction = 1.0, others 0.
 {
-  const src = 'support(single)\nhorz beam(steel rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) end:force(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);
@@ -249,7 +249,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 // rotation constraint is enforced inside the 4×4 solve but isn't directly
 // observable from C_eff (which reports displacement).
 {
-  const src = 'support(both)\nhorz beam(steel rect(W10 H10) L100) mid:force(1kgf)';
+  const src = 'support(both)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L100) mid:force(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances, diagnostics: cd } = buildCompliances(beams, structure);
@@ -300,7 +300,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 //   beam2 end   = tip
 // → 4 surviving queryNodes.
 {
-  const src = 'support(single)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(single)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:force(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);
@@ -319,7 +319,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
 // second clamp point); compliance still keeps it for the fixed-fixed solve.
 // Non-root beam endpoints stay visible.
 {
-  const src = 'support(both)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:force(1kgf)';
+  const src = 'support(both)\nmass_accel(0)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:force(1kgf)';
   const { structure } = parse(src);
   const { beams } = walk(structure);
   const { compliances } = buildCompliances(beams, structure);

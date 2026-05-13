@@ -1,6 +1,6 @@
 import type { Diagnostic } from '../dsl/diagnostics';
 import type { Attachment, Structure } from '../dsl/parse';
-import { KGF_TO_N, MATERIALS, type MaterialId } from '../state';
+import { G_M_PER_S2, KGF_TO_N, MATERIALS, type MaterialId } from '../state';
 import type { BeamNode, Frame, Vec3 } from '../walker';
 import { resolveSection, type Section } from './section';
 
@@ -79,6 +79,26 @@ export function buildCompliances(
       if (F <= 0) continue;
       loadNodes.push({ beamIx: i, offset_mm: att.local_mm, kind: 'force' });
       loadFmax_N.push(F);
+    }
+  }
+
+  // Mass-acceleration body force: `mass_accel(a)` (default 1G) adds one
+  // direction-free `mid:force(mass·a)` per beam. The directional optimization
+  // already maximizes over direction per load, so the body force aggregates
+  // the worst-case of gravity / inertial acceleration / vibration without
+  // committing to a global "down" axis.
+  const accel_m_s2 = getMassAccel_m_s2(structure);
+  if (accel_m_s2 > 0) {
+    for (let i = 0; i < beams.length; i++) {
+      const b = beams[i] as BeamNode;
+      const A = sections[i]!.A_mm2;
+      if (A === null || A <= 0) continue; // moment(...) sections lack area.
+      const rho = mats[i]!.rho_kg_per_mm3;
+      const mass_kg = rho * A * b.length_mm;
+      const F_N = mass_kg * accel_m_s2;
+      if (F_N <= 0) continue;
+      loadNodes.push({ beamIx: i, offset_mm: b.length_mm / 2, kind: 'force' });
+      loadFmax_N.push(F_N);
     }
   }
 
@@ -492,6 +512,23 @@ function solve4x3(A: number[], B: number[]): number[] | null {
     for (let c = 0; c < M; c++) X[r * M + c] = aug[r * W + N + c] as number;
   }
   return X;
+}
+
+// Acceleration in m/s². Defaults to 1G when no `mass_accel` env is present.
+// Bare numbers and `G`-unit values are scaled by g; `m/s2`-unit values pass
+// through unchanged. Unknown units fall back to scaling by g.
+export function getMassAccel_m_s2(structure: Structure): number {
+  let env;
+  for (const e of structure.envs) {
+    if (e.name === 'mass_accel') { env = e; break; }
+  }
+  if (!env || env.params.length !== 1) return G_M_PER_S2;
+  const p = env.params[0]!;
+  if (p.kind !== 'quantity') return G_M_PER_S2;
+  const { value, unit } = p.quantity;
+  if (!Number.isFinite(value) || value < 0) return G_M_PER_S2;
+  if (unit === 'm/s2') return value;
+  return value * G_M_PER_S2;
 }
 
 export function getSupportKind(structure: Structure): 'single' | 'both' | undefined {

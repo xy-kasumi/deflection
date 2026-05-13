@@ -79,10 +79,11 @@ export function lex(line: string, baseOffset: number): {
       continue;
     }
 
-    // Lowercase word: IDENT or KW_DIR / KW_BEAM / KW_LOC.
-    if (isLower(c)) {
+    // Lowercase word: IDENT or KW_DIR / KW_BEAM / KW_LOC. Idents may contain
+    // '_' (e.g. `mass_accel`); keywords don't.
+    if (isLower(c) || c === '_') {
       const start = i;
-      while (i < line.length && isLower(line[i] as string)) i++;
+      while (i < line.length && (isLower(line[i] as string) || line[i] === '_')) i++;
       const text = line.slice(start, i);
       const span: Span = { start: baseOffset + start, end: baseOffset + i };
       if (text === 'beam') {

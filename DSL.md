@@ -31,14 +31,18 @@ LOC-SEP = ":"
 KW_BEAM = "beam"
 KW_DIR = "horz" | "right" | "left" | "up" | "down"
 KW_LOC = "end" | "mid"
-IDENT = /[a-z]+/ (* that is not any of BEAM/DIR/LOC *)
+IDENT = /[a-z_]+/ (* that is not any of BEAM/DIR/LOC *)
 QUANTITY = [ PREFIX ] NUMBER [ UNIT ] (* no space in-between *)
 PREFIX = /[A-Z][A-Za-z]*/
 NUMBER = (* floating point number *)
-UNIT = "N" | "kgf" | "mm4" | "N/mm" | ...
+UNIT
+  = "N" | "kgf"
+  | "mm4"
+  | "N/mm"
+  | "G" | "m/s2" | ...
 ```
 
-semantics
+## Semantics
 * known `IDENT`:
     * material: `plastic`, `aluminum`, `steel`
     * shape: `rect`, `round`, `moment`
@@ -46,10 +50,15 @@ semantics
 * Default unit is "mm", "kgf", "mm4"
 * `horz` is ambiguous other than for the root beam
 * `end` is assumed for omitted loc-spec
-* `support` environment defines boundary conditions on the **root beam**
-  (the first beam). Subsequent beams attach as appendages — they transmit
-  load into the root beam through their attachment point but have no
-  boundary conditions of their own.
-    * `support(single)`: cantilever — root beam clamped at its start.
+
+env-defs
+
+* `support` defines boundary conditions on the **root beam** (the first beam).
+  * `support(single)`: cantilever — root beam clamped at its start.
     * `support(both)`: fixed-fixed — root beam clamped at both ends, with
       its axis direction left free (so axial strain isn't over-constrained).
+* `mass_accel(<acceleration>)` defines mass-based. `mass_accel(1G)` is assumed when omitted.
+  * e.g. `mass_accel(1G)`
+  * esentially a short-hand for adding `mid:force(<mass_of_the_beam x accel>)` for every beam
+  * note that we cannot write "gravity force towards specific direction" regardless of `mass_accel` or `force`
+    * essentially, we lump together gravity + intertia from acceleration + vibration into single "force"

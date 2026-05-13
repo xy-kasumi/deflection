@@ -1,7 +1,8 @@
-import type { Diagnostic } from './diagnostics';
+import type { Diagnostic, Span } from './diagnostics';
 import type { Attachment, BeamDef, Param, Structure } from './parse';
 
-const KNOWN_ENVS = new Set(['support']);
+const KNOWN_ENVS = new Set(['support', 'mass_accel']);
+const ACCEL_UNITS = new Set(['G', 'm/s2']);
 const KNOWN_MATERIALS = new Set(['plastic', 'aluminum', 'steel']);
 const KNOWN_SHAPES = new Set(['rect', 'round', 'moment']);
 const KNOWN_ATTACHMENTS = new Set(['force']);
@@ -18,7 +19,9 @@ export function semcheck(s: Structure): Diagnostic[] {
         message: `unknown environment '${env.name}'`,
         span: env.span,
       });
+      continue;
     }
+    if (env.name === 'mass_accel') checkMassAccel(env.params, env.span, diags);
   }
 
   for (let i = 0; i < s.beams.length; i++) {
@@ -171,6 +174,48 @@ function checkShapeArgs(name: string, params: Param[] | undefined, diags: Diagno
         span: p.span,
       });
     }
+  }
+}
+
+function checkMassAccel(params: Param[], span: Span, diags: Diagnostic[]) {
+  if (params.length !== 1) {
+    diags.push({
+      severity: 'warning',
+      message: 'mass_accel(...) takes exactly one acceleration',
+      span,
+    });
+    return;
+  }
+  const p = params[0] as Param;
+  if (p.kind !== 'quantity') {
+    diags.push({
+      severity: 'warning',
+      message: 'mass_accel(...) argument must be a number',
+      span: p.span,
+    });
+    return;
+  }
+  const q = p.quantity;
+  if (q.prefix) {
+    diags.push({
+      severity: 'warning',
+      message: `unexpected prefix '${q.prefix}' on mass_accel argument`,
+      span: p.span,
+    });
+  }
+  if (q.unit !== undefined && !ACCEL_UNITS.has(q.unit)) {
+    diags.push({
+      severity: 'warning',
+      message: `unknown unit '${q.unit}' on mass_accel (expected G or m/s2)`,
+      span: p.span,
+    });
+  }
+  if (!Number.isFinite(q.value) || q.value < 0) {
+    diags.push({
+      severity: 'warning',
+      message: 'mass_accel must be non-negative',
+      span: p.span,
+    });
   }
 }
 
