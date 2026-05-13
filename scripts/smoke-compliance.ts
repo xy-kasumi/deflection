@@ -334,7 +334,7 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
   else console.log(`ok   root beam end query at compliance.queryNodes[${clampIx}]`);
 
   const sim = runSim(beams, structure);
-  console.log(`SimResult.nodes.length = ${sim.nodes.length}, maxNodeIx = ${sim.maxNodeIx}`);
+  console.log(`SimResult.nodes.length = ${sim.nodes.length}, tipNodeIx = ${sim.tipNodeIx}`);
   const clampInNodes = sim.nodes.some((n) => {
     const qn = compliances.queryNodes[n.queryIx]!;
     return qn.beamIx === 0 && qn.offset_mm === rootEnd;

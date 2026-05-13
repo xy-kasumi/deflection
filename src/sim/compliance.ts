@@ -66,7 +66,18 @@ export function buildCompliances(
   // beam's end is retained even under support(both) because the fixed-fixed
   // solve below needs its compliance entries — run.ts hides it from the
   // public node list.
+  const supportKind = getSupportKind(structure);
   const queryNodes: Node[] = buildQueryNodes(beams);
+  // Tip: end of last beam, except mid of root beam when there's only one beam
+  // and support(both) (both endpoints clamped). Add explicitly so the readout
+  // and headline arrow always have an anchor.
+  const tipLoc = getTipLoc(beams, supportKind);
+  if (
+    tipLoc &&
+    !queryNodes.some((n) => n.beamIx === tipLoc.beamIx && n.offset_mm === tipLoc.offset_mm)
+  ) {
+    queryNodes.push(tipLoc);
+  }
 
   // Load nodes: one per force attachment (in chain order).
   const loadNodes: LoadNode[] = [];
@@ -107,7 +118,6 @@ export function buildCompliances(
   // compliance with these extras, then solve a 4×4 compatibility system for
   // the chord-perpendicular reaction components (chord = root beam axis;
   // force/flexibility method).
-  const supportKind = getSupportKind(structure);
   const fixedFixed = supportKind === 'both' && beams.length > 0;
   let clampForceLoadIx = -1;
   let clampMomentLoadIx = -1;
@@ -529,6 +539,20 @@ export function getMassAccel_m_s2(structure: Structure): number {
   if (!Number.isFinite(value) || value < 0) return G_M_PER_S2;
   if (unit === 'm/s2') return value;
   return value * G_M_PER_S2;
+}
+
+// Chain tip per the vocab: end of last beam, except mid of root beam under
+// support(both) with a single beam (both endpoints clamped).
+export function getTipLoc(
+  beams: BeamNode[],
+  supportKind: 'single' | 'both' | undefined,
+): { beamIx: number; offset_mm: number } | null {
+  if (beams.length === 0) return null;
+  if (supportKind === 'both' && beams.length === 1) {
+    return { beamIx: 0, offset_mm: beams[0]!.length_mm / 2 };
+  }
+  const last = beams.length - 1;
+  return { beamIx: last, offset_mm: beams[last]!.length_mm };
 }
 
 export function getSupportKind(structure: Structure): 'single' | 'both' | undefined {

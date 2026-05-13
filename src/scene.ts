@@ -208,7 +208,7 @@ export class Scene {
     maxDim: number,
     _attachRadius: number,
   ): void {
-    const headline = sim.nodes[sim.maxNodeIx];
+    const headline = sim.nodes[sim.tipNodeIx];
     if (!headline) return;
 
     const k = sim.display_scale;

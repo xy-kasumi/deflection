@@ -1,7 +1,7 @@
 import type { Diagnostic } from '../dsl/diagnostics';
 import type { Structure } from '../dsl/parse';
 import type { BeamNode, Vec3 } from '../walker';
-import { buildCompliances, getSupportKind } from './compliance';
+import { buildCompliances, getSupportKind, getTipLoc } from './compliance';
 import { directionalFor, type Directional } from './directional';
 import { attribute, type PerBeamAttrib, type PerLoadAttrib } from './attribute';
 
@@ -37,9 +37,9 @@ export type DisplayScale = 1 | 10 | 100 | 1000;
 
 export interface SimResult {
   nodes: NodeDeflectionResult[];
-  // Index into `nodes` of the node with the largest δ_max — the one whose
-  // direction d* drives the attribution breakdown and the headline arrow.
-  maxNodeIx: number;
+  // Index into `nodes` of the chain tip (see vocab). Its d* drives the
+  // attribution breakdown and the headline arrow. `-1` when no chain.
+  tipNodeIx: number;
   display_scale: DisplayScale;
   forces: SimForce[];
   beams: SimBeam[];
@@ -86,19 +86,19 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
     });
   });
 
-  let maxNodeIx = -1;
-  let maxVal = -Infinity;
-  for (let i = 0; i < nodes.length; i++) {
-    if (nodes[i]!.delta_max_mm > maxVal) {
-      maxVal = nodes[i]!.delta_max_mm;
-      maxNodeIx = i;
-    }
+  const tipLoc = getTipLoc(beams, supportKind);
+  let tipNodeIx = -1;
+  if (tipLoc) {
+    tipNodeIx = nodes.findIndex((n) => {
+      const qn = compliances.queryNodes[n.queryIx]!;
+      return qn.beamIx === tipLoc.beamIx && qn.offset_mm === tipLoc.offset_mm;
+    });
   }
 
   let forces: SimForce[] = [];
   let beamAttribs: SimBeam[] = [];
 
-  const headline = maxNodeIx >= 0 ? nodes[maxNodeIx]! : undefined;
+  const headline = tipNodeIx >= 0 ? nodes[tipNodeIx]! : undefined;
   if (headline && headline.delta_max_mm > 0 && compliances.loadNodes.length > 0) {
     const attr = attribute(compliances, headline.queryIx, headline.d_star);
     forces = attr.perLoad.map((pl: PerLoadAttrib) => {
@@ -124,7 +124,7 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
 
   return {
     nodes,
-    maxNodeIx,
+    tipNodeIx,
     display_scale: 1,
     forces,
     beams: beamAttribs,
@@ -135,7 +135,7 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
 function emptyResult(): SimResult {
   return {
     nodes: [],
-    maxNodeIx: -1,
+    tipNodeIx: -1,
     display_scale: 1,
     forces: [],
     beams: [],

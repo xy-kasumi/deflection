@@ -12,12 +12,12 @@ export function renderReadout(el: HTMLElement, sim: SimResult): void {
     return;
   }
 
-  const top = sim.nodes[sim.maxNodeIx];
-  if (!top) return;
+  const tip = sim.nodes[sim.tipNodeIx];
+  if (!tip) return;
 
   const headline = document.createElement('div');
   headline.className = 'ro-headline';
-  headline.textContent = `δ max ≈ ${formatMm(top.delta_max_mm)}`;
+  headline.textContent = `tip δ ≈ ${formatMm(tip.delta_max_mm)}`;
   el.appendChild(headline);
 
   // Forces section.
