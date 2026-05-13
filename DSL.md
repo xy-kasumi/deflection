@@ -53,6 +53,3 @@ semantics
     * `support(single)`: cantilever — root beam clamped at its start.
     * `support(both)`: fixed-fixed — root beam clamped at both ends, with
       its axis direction left free (so axial strain isn't over-constrained).
-      Models the "both ends rigidly bracketed / bolted down" case;
-      a floppy multi-pillar frame (slender posts) would need a separate
-      model.
