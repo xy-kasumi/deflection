@@ -8,55 +8,8 @@
   </head>
   <body>
     <div id="app">
-      <aside id="form-panel">
-        <h1>Beam</h1>
-        <form id="beam-form" autocomplete="off">
-          <label>
-            <span>Material</span>
-            <select name="material">
-              <option value="PLA" selected>Printed PLA</option>
-              <option value="AL">Aluminum</option>
-              <option value="STEEL">Steel</option>
-            </select>
-            <small class="material-info" id="material-info"></small>
-          </label>
-          <label>
-            <span>Beam type</span>
-            <select name="beamType">
-              <option value="cantilever" selected>Cantilever (tip load)</option>
-              <option value="simply-supported">Simply supported (center load)</option>
-            </select>
-          </label>
-          <label>
-            <span>Length L (mm)</span>
-            <input type="number" name="L_mm" step="any" value="100" />
-          </label>
-          <label>
-            <span>I<sub>x</sub> (mm⁴)</span>
-            <input type="number" name="Ix_mm4" step="any" value="50" />
-          </label>
-          <label>
-            <span>I<sub>y</sub> (mm⁴)</span>
-            <input type="number" name="Iy_mm4" step="any" value="300" />
-          </label>
-          <label>
-            <span>J — torsion (mm⁴)</span>
-            <input type="number" name="J_mm4" step="any" value="150" />
-          </label>
-          <label>
-            <span>Force (kgf)</span>
-            <input type="number" name="force_kgf" step="any" value="0.5" />
-          </label>
-        </form>
-        <div id="readout">
-          <div class="line"><span class="lbl">δ peak</span><span class="val" id="readout-delta">—</span></div>
-          <div id="scale-buttons">
-            <button type="button" data-scale="1">×1</button>
-            <button type="button" data-scale="10">×10</button>
-            <button type="button" data-scale="100">×100</button>
-            <button type="button" data-scale="1000">×1000</button>
-          </div>
-        </div>
+      <aside id="editor-panel">
+        <div id="editor"></div>
       </aside>
       <main id="canvas-panel">
         <canvas id="canvas"></canvas>

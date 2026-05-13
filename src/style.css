@@ -14,108 +14,50 @@ html, body {
   height: 100vh;
 }
 
-#form-panel {
-  width: 280px;
+#editor-panel {
+  width: 420px;
   flex-shrink: 0;
-  padding: 16px;
   background: #ffffff;
-  overflow-y: auto;
   border-right: 1px solid #d8dce2;
-}
-
-#form-panel h1 {
-  font-size: 16px;
-  font-weight: 600;
-  margin: 0 0 16px;
-  color: #1f2328;
-}
-
-#beam-form label {
   display: flex;
   flex-direction: column;
-  margin-bottom: 12px;
-  font-size: 13px;
+  min-height: 0;
 }
 
-#beam-form label span {
-  margin-bottom: 4px;
-  color: #57606a;
-}
-
-#beam-form input,
-#beam-form select {
-  background: #ffffff;
-  color: #1f2328;
-  border: 1px solid #d0d7de;
-  padding: 6px 8px;
-  font: inherit;
-  font-size: 14px;
-  border-radius: 3px;
-}
-
-#beam-form input:focus,
-#beam-form select:focus {
-  outline: none;
-  border-color: #0969da;
-  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.15);
-}
-
-.material-info {
-  font-size: 11px;
-  color: #8a93a0;
-  margin-top: 4px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-}
-
-#readout {
-  margin-top: 20px;
-  padding: 12px;
-  background: #f6f7f9;
-  border: 1px solid #d8dce2;
-  border-radius: 4px;
-}
-
-#readout .line {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  margin-bottom: 6px;
-}
-
-#readout .lbl { color: #57606a; }
-
-#readout .val {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  color: #1f2328;
-}
-
-#scale-buttons {
-  display: flex;
-  gap: 4px;
-  margin-top: 10px;
-}
-
-#scale-buttons button {
+#editor {
   flex: 1;
-  background: #ffffff;
-  color: #57606a;
-  border: 1px solid #d0d7de;
-  padding: 4px 0;
-  font: inherit;
-  font-size: 12px;
-  border-radius: 3px;
-  cursor: pointer;
+  min-height: 0;
+  font-size: 13px;
 }
 
-#scale-buttons button:hover {
-  background: #f3f4f6;
-  border-color: #afb8c1;
+/* CodeMirror tuning */
+.cm-editor {
+  height: 100%;
 }
 
-#scale-buttons button.active {
-  background: #ddebf7;
-  color: #0969da;
-  border-color: #0969da;
+.cm-scroller {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.cm-content {
+  padding: 12px 8px;
+}
+
+/* Diagnostic squiggles. CM6 lint renders these classes on marked ranges. */
+.cm-lintRange-error {
+  background-image: linear-gradient(45deg, transparent 65%, #d62828 65%, #d62828 80%, transparent 80%),
+                    linear-gradient(135deg, transparent 65%, #d62828 65%, #d62828 80%, transparent 80%);
+  background-size: 6px 4px;
+  background-repeat: repeat-x;
+  background-position: bottom;
+}
+
+.cm-lintRange-warning {
+  background-image: linear-gradient(45deg, transparent 65%, #c79100 65%, #c79100 80%, transparent 80%),
+                    linear-gradient(135deg, transparent 65%, #c79100 65%, #c79100 80%, transparent 80%);
+  background-size: 6px 4px;
+  background-repeat: repeat-x;
+  background-position: bottom;
 }
 
 #canvas-panel {

@@ -1,27 +1,29 @@
 import * as THREE from 'three';
-import type { BeamState } from './state';
-import type { Deflection, CrossSection } from './physics';
+import type { BeamNode, Vec3 } from './walker';
 
 const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
 
 const COLOR_BG = 0xffffff;
-const COLOR_BEAM = 0x3b6db5;
-const COLOR_DEFLECTION = 0xd97a1a;
-const COLOR_SUPPORT = 0x7a8593;
 const COLOR_AXIS = 0xd0d7de;
-const COLOR_SECTION = 0x2c5687;
+const COLOR_JOINT = 0x444b53;
+const COLOR_ATTACHMENT = 0xd97a1a;
+const COLOR_UP_MARKER = 0x2e7d32;
 
-const SECTION_FRACTION_ALONG_BEAM = 0.2;
+const MATERIAL_COLORS: Record<string, number> = {
+  plastic: 0xc7b56b,
+  aluminum: 0x8693a3,
+  steel: 0x3b6db5,
+};
+const COLOR_BEAM_DEFAULT = 0x9aa0a6;
+
+// Drag tuning: time-constants of the input low-pass and post-release decay.
+const SMOOTH_K = 18;
+const DECAY_K = 16;
+const STOP_VEL = 0.1;
+const YAW_PER_PX = 1 / 150;
 
 const deg = (d: number) => (d * Math.PI) / 180;
-
-// Drag tuning: time-constant of the input low-pass (smoothing) and of the
-// post-release rotational decay. Larger constants = less lag / faster stop.
-const SMOOTH_K = 18;   // ~55 ms lag during drag
-const DECAY_K = 16;    // ~60 ms inertia time constant
-const STOP_VEL = 0.1;  // rad/s — threshold to end the animation loop
-const YAW_PER_PX = 1 / 150;
 
 export class Scene {
   private renderer: THREE.WebGLRenderer;
@@ -29,7 +31,6 @@ export class Scene {
   private camera: THREE.OrthographicCamera;
   private content: THREE.Group;
   private axes: THREE.Group;
-  private currentL: number;
   private yaw: number;
   private pitch: number;
   private targetYaw: number;
@@ -38,8 +39,11 @@ export class Scene {
   private lastPointerX = 0;
   private lastFrameTime = 0;
   private animHandle = 0;
+  // World-frame extent used for camera framing. Recomputed on update().
+  private center: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
+  private scaleHalf = 100;
 
-  constructor(canvas: HTMLCanvasElement, initialL: number) {
+  constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.root = new THREE.Scene();
@@ -49,7 +53,6 @@ export class Scene {
     this.axes = new THREE.Group();
     this.root.add(this.content);
     this.root.add(this.axes);
-    this.currentL = initialL;
     this.yaw = deg(ISO_YAW_DEG);
     this.pitch = deg(ISO_PITCH_DEG);
     this.targetYaw = this.yaw;
@@ -58,6 +61,131 @@ export class Scene {
     ro.observe(canvas);
 
     this.installDrag(canvas);
+  }
+
+  update(beams: BeamNode[]): void {
+    disposeChildren(this.content);
+    disposeChildren(this.axes);
+
+    if (beams.length === 0) {
+      this.center.set(0, 0, 0);
+      this.scaleHalf = 100;
+      this.refresh();
+      return;
+    }
+
+    // Determine a length scale (average beam length) for visual sizing.
+    const avgL = beams.reduce((s, b) => s + b.length_mm, 0) / beams.length;
+    const beamRadius = Math.max(0.5, avgL / 80);
+    const jointRadius = Math.max(0.8, avgL / 40);
+    const attachRadius = Math.max(0.6, avgL / 50);
+
+    const jointGeom = new THREE.SphereGeometry(jointRadius, 12, 8);
+    const attachGeom = new THREE.SphereGeometry(attachRadius, 10, 6);
+    const upMarkerGeom = new THREE.SphereGeometry(attachRadius * 0.9, 10, 6);
+    const jointMat = new THREE.MeshBasicMaterial({ color: COLOR_JOINT });
+    const attachMat = new THREE.MeshBasicMaterial({ color: COLOR_ATTACHMENT });
+    const upMat = new THREE.MeshBasicMaterial({ color: COLOR_UP_MARKER });
+    const upLineMat = new THREE.LineBasicMaterial({
+      color: COLOR_UP_MARKER,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+    });
+    // Up-marker is offset away from the joint along both walker-up (so the
+    // section orientation is visible) and walker-fwd (so it's unambiguously
+    // associated with this beam, not the parent's end joint).
+    const upOffset = avgL / 8;
+
+    const bbox = new THREE.Box3();
+    bbox.makeEmpty();
+
+    for (const b of beams) {
+      const matColor = b.material && MATERIAL_COLORS[b.material]
+        ? MATERIAL_COLORS[b.material]
+        : COLOR_BEAM_DEFAULT;
+
+      const start = new THREE.Vector3(...b.startFrame.origin);
+      const fwd = new THREE.Vector3(...b.startFrame.fwd);
+      const end = start.clone().add(fwd.clone().multiplyScalar(b.length_mm));
+
+      const cyl = new THREE.CylinderGeometry(beamRadius, beamRadius, b.length_mm, 16, 1, true);
+      // Default cylinder is along +Y; rotate to align with beam +fwd, then translate.
+      cyl.translate(0, b.length_mm / 2, 0);
+      const beamMat = new THREE.MeshBasicMaterial({
+        color: matColor,
+        transparent: true,
+        opacity: 0.32,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(cyl, beamMat);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), fwd);
+      mesh.position.copy(start);
+      this.content.add(mesh);
+
+      // Joint dots at start and end.
+      const startDot = new THREE.Mesh(jointGeom, jointMat);
+      startDot.position.copy(start);
+      this.content.add(startDot);
+      const endDot = new THREE.Mesh(jointGeom, jointMat);
+      endDot.position.copy(end);
+      this.content.add(endDot);
+
+      // Local-up marker: small green sphere offset along walker-up at the
+      // beam's start. Makes the section-frame orientation visible and
+      // assigns visual ownership to this beam (not the parent joint).
+      // A faint line tethers it to the start joint to make the link explicit.
+      const upVec = new THREE.Vector3(...b.startFrame.up);
+      const fwdOffset = b.length_mm * 0.08;
+      const upMarker = new THREE.Mesh(upMarkerGeom, upMat);
+      upMarker.position
+        .copy(start)
+        .add(fwd.clone().multiplyScalar(fwdOffset))
+        .add(upVec.clone().multiplyScalar(upOffset));
+      this.content.add(upMarker);
+
+      // Tether is orthogonal to the beam: from a point on the centerline at
+      // the marker's fwd-offset, straight along walker-up to the marker.
+      const tetherFoot = start.clone().add(fwd.clone().multiplyScalar(fwdOffset));
+      const tetherGeom = new THREE.BufferGeometry().setFromPoints([
+        tetherFoot,
+        upMarker.position.clone(),
+      ]);
+      this.content.add(new THREE.Line(tetherGeom, upLineMat));
+
+      // Attachment markers along the beam axis.
+      for (const att of b.attachmentOffsets) {
+        const pos = start.clone().add(fwd.clone().multiplyScalar(att.local_mm));
+        const dot = new THREE.Mesh(attachGeom, attachMat);
+        dot.position.copy(pos);
+        this.content.add(dot);
+      }
+
+      bbox.expandByPoint(start);
+      bbox.expandByPoint(end);
+    }
+
+    bbox.getCenter(this.center);
+    const size = bbox.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    this.scaleHalf = Math.max(50, maxDim * 0.8 + Math.max(beamRadius * 6, 10));
+
+    this.rebuildAxes(bbox);
+    this.refresh();
+  }
+
+  private rebuildAxes(bbox: THREE.Box3): void {
+    const mat = new THREE.LineBasicMaterial({ color: COLOR_AXIS });
+    const min = bbox.min;
+    const max = bbox.max;
+    const pad = Math.max(10, (max.x - min.x) * 0.1);
+    const positions = new Float32Array([
+      min.x - pad, 0, 0,
+      max.x + pad, 0, 0,
+    ]);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    this.axes.add(new THREE.Line(geom, mat));
   }
 
   private installDrag(canvas: HTMLCanvasElement) {
@@ -120,139 +248,19 @@ export class Scene {
     this.animHandle = requestAnimationFrame(tick);
   }
 
-  update(s: BeamState, defl: Deflection, displayScale: number, section: CrossSection) {
-    this.currentL = s.L_mm;
-    this.rebuildContent(s, defl, displayScale, section);
-    this.rebuildAxes(s.L_mm);
-    this.refresh();
-  }
-
-  private rebuildContent(
-    s: BeamState,
-    defl: Deflection,
-    displayScale: number,
-    section: CrossSection,
-  ) {
-    disposeChildren(this.content);
-    const L = s.L_mm;
-    const r = L / 80;
-
-    // Undeformed beam: thin translucent cylinder along +X from x=0 to x=L.
-    const beamGeom = new THREE.CylinderGeometry(r, r, L, 24);
-    beamGeom.rotateZ(Math.PI / 2);
-    beamGeom.translate(L / 2, 0, 0);
-    const beamMat = new THREE.MeshBasicMaterial({
-      color: COLOR_BEAM,
-      transparent: true,
-      opacity: 0.28,
-      depthWrite: false,
-    });
-    this.content.add(new THREE.Mesh(beamGeom, beamMat));
-
-    // Supports.
-    const supportMat = new THREE.MeshBasicMaterial({ color: COLOR_SUPPORT });
-    if (s.beamType === 'cantilever') {
-      const wall = new THREE.Mesh(
-        new THREE.BoxGeometry(L / 40, L / 3, L / 3),
-        supportMat,
-      );
-      wall.position.set(-L / 80, 0, 0);
-      this.content.add(wall);
-    } else {
-      const pinH = L / 15;
-      const pinR = L / 28;
-      const pinGeom = new THREE.ConeGeometry(pinR, pinH, 4);
-      pinGeom.rotateX(Math.PI / 2);
-      pinGeom.translate(0, 0, -pinH / 2);
-      const pin1 = new THREE.Mesh(pinGeom, supportMat);
-      const pin2 = new THREE.Mesh(pinGeom, supportMat);
-      pin2.position.x = L;
-      this.content.add(pin1, pin2);
-    }
-
-    // Deflection ellipse at the load point: in YZ plane, semi-axes (ax along Y,
-    // ay along Z). Force can point in any transverse direction with the same
-    // magnitude, so the deflection traces this closed locus.
-    const loadX = s.beamType === 'cantilever' ? L : L / 2;
-    const ax = defl.ax_mm * displayScale;
-    const ay = defl.ay_mm * displayScale;
-    const tubeR = L / 220;
-    if (defl.peak_mm > 0 && Math.max(ax, ay) > tubeR * 1.5) {
-      const N = 96;
-      const pts: THREE.Vector3[] = [];
-      for (let i = 0; i < N; i++) {
-        const th = (i / N) * 2 * Math.PI;
-        pts.push(new THREE.Vector3(loadX, ax * Math.cos(th), ay * Math.sin(th)));
-      }
-      const curve = new THREE.CatmullRomCurve3(pts, true);
-      const geom = new THREE.TubeGeometry(curve, N * 2, tubeR, 6, true);
-      const mat = new THREE.MeshBasicMaterial({ color: COLOR_DEFLECTION });
-      this.content.add(new THREE.Mesh(geom, mat));
-    }
-
-    // Cross-section: small extruded slab at x ≈ 0.2 L, in actual mm so the
-    // user gets a sense of section-vs-length proportion.
-    this.addCrossSection(SECTION_FRACTION_ALONG_BEAM * L, L, section);
-  }
-
-  private addCrossSection(xSec: number, L: number, section: CrossSection) {
-    if (section.type === 'unreachable') return;
-    const eps = L * 0.04;
-    const mat = new THREE.MeshBasicMaterial({ color: COLOR_SECTION });
-
-    if (section.type === 'cruciform') {
-      const { w_mm, h_mm, t_mm } = section;
-      const horiz = new THREE.Mesh(new THREE.BoxGeometry(eps, w_mm, t_mm), mat);
-      const vert = new THREE.Mesh(new THREE.BoxGeometry(eps, t_mm, h_mm), mat);
-      horiz.position.x = xSec;
-      vert.position.x = xSec;
-      this.content.add(horiz, vert);
-    } else if (section.type === 'hollowBox') {
-      const { W_mm, H_mm, t_mm } = section;
-      const top = new THREE.Mesh(new THREE.BoxGeometry(eps, W_mm, t_mm), mat);
-      top.position.set(xSec, 0, H_mm / 2 - t_mm / 2);
-      const bot = new THREE.Mesh(new THREE.BoxGeometry(eps, W_mm, t_mm), mat);
-      bot.position.set(xSec, 0, -H_mm / 2 + t_mm / 2);
-      const inner = H_mm - 2 * t_mm;
-      const left = new THREE.Mesh(new THREE.BoxGeometry(eps, t_mm, inner), mat);
-      left.position.set(xSec, -W_mm / 2 + t_mm / 2, 0);
-      const right = new THREE.Mesh(new THREE.BoxGeometry(eps, t_mm, inner), mat);
-      right.position.set(xSec, W_mm / 2 - t_mm / 2, 0);
-      this.content.add(top, bot, left, right);
-    } else {
-      const { b_mm, h_mm } = section;
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(eps, b_mm, h_mm), mat);
-      mesh.position.x = xSec;
-      this.content.add(mesh);
-    }
-  }
-
-  private rebuildAxes(L: number) {
-    disposeChildren(this.axes);
-    const mat = new THREE.LineBasicMaterial({ color: COLOR_AXIS });
-    const positions = new Float32Array([
-      -L * 0.1, 0, 0,
-       L * 1.1, 0, 0,
-    ]);
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    this.axes.add(new THREE.Line(geom, mat));
-  }
-
   private refresh() {
     this.updateCamera();
     this.renderer.render(this.root, this.camera);
   }
 
   private updateCamera() {
-    const L = this.currentL;
-    const target = new THREE.Vector3(L / 2, 0, 0);
+    const target = this.center;
     const elev = -this.pitch;
     const ce = Math.cos(elev);
     const se = Math.sin(elev);
     const sy = Math.sin(this.yaw);
     const cy = Math.cos(this.yaw);
-    const r = 2 * L;
+    const r = 4 * this.scaleHalf;
     this.camera.position.set(
       target.x + r * ce * sy,
       target.y - r * ce * cy,
@@ -269,7 +277,7 @@ export class Scene {
     const w = canvas.clientWidth || 1;
     const h = canvas.clientHeight || 1;
     const aspect = w / h;
-    const halfBase = L * 0.6;
+    const halfBase = this.scaleHalf;
     if (aspect >= 1) {
       this.camera.left = -halfBase * aspect;
       this.camera.right = halfBase * aspect;
@@ -281,8 +289,8 @@ export class Scene {
       this.camera.top = halfBase / aspect;
       this.camera.bottom = -halfBase / aspect;
     }
-    this.camera.near = -10 * L;
-    this.camera.far = 10 * L;
+    this.camera.near = -100 * this.scaleHalf;
+    this.camera.far = 100 * this.scaleHalf;
     this.camera.updateProjectionMatrix();
   }
 
@@ -311,3 +319,6 @@ function disposeChildren(group: THREE.Group) {
   });
   group.clear();
 }
+
+// Keep this export so callers using ...spread-style construction can pass a Vec3.
+export type { Vec3 };
