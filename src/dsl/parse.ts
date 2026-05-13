@@ -143,8 +143,16 @@ class Parser {
       return this.fail("expected 'beam'", beamTok?.span ?? dirTok.span);
     }
 
-    const params = this.parseParamList();
-    if (!params) return null;
+    // paramlist is optional per the grammar — `horz beam` without parens is
+    // legal syntax; missing material/shape/length surface as semcheck warnings.
+    let beamParams: Param[] = [];
+    let paramsEndSpan = beamTok.span;
+    if (this.peek()?.kind === 'LP') {
+      const pl = this.parseParamList();
+      if (!pl) return null;
+      beamParams = pl.params;
+      paramsEndSpan = pl.span;
+    }
 
     const attachments: Attachment[] = [];
     while (this.peek()) {
@@ -155,12 +163,12 @@ class Parser {
 
     const startSpan = loc?.span ?? dirTok.span;
     const endSpan =
-      attachments.length > 0 ? attachments[attachments.length - 1]!.span : params.span;
+      attachments.length > 0 ? attachments[attachments.length - 1]!.span : paramsEndSpan;
 
     return {
       loc,
       dir: dirTok.dir as Dir,
-      params: params.params,
+      params: beamParams,
       attachments,
       span: { start: startSpan.start, end: endSpan.end },
     };

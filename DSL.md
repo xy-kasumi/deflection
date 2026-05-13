@@ -15,7 +15,7 @@ EBNF
   lang = { env-def | beam-def } (* each line cannot contain more than one defs *)
   
   env-def = IDENT paramlist
-  beam-def = [ loc-spec ] KW_DIR KW_BEAM paramlist { attachment }
+  beam-def = [ loc-spec ] KW_DIR KW_BEAM [ paramlist ] { attachment }
   attachment = [ loc-spec ] IDENT paramlist
   loc-spec = ( KW_LOC | QUANTITY ) LOC-SEP
   

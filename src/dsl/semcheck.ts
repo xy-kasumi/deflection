@@ -129,7 +129,11 @@ function checkBeamParams(b: BeamDef, diags: Diagnostic[]) {
     diags.push({ severity: 'warning', message: 'missing shape', span: b.span });
   }
   if (!length) {
-    diags.push({ severity: 'warning', message: "missing length 'L…'", span: b.span });
+    diags.push({
+      severity: 'warning',
+      message: "missing length (e.g. 'L100') — defaulting to L=100",
+      span: b.span,
+    });
   }
 }
 
