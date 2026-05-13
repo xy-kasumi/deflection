@@ -4,6 +4,7 @@ import type { SimResult } from '../sim/run';
 import type { Directional } from '../sim/directional';
 import { formatMm } from '../readout';
 import { COLOR, VU, MOTION, hexToVec3 } from './tokens';
+import { Labels } from './labels';
 
 const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
@@ -74,11 +75,6 @@ const LOBE_KONPEITO_FRAC  = 0.5;
 
 const deg = (d: number) => (d * Math.PI) / 180;
 
-interface LabelEntry {
-  el: HTMLDivElement;
-  worldPos: THREE.Vector3;
-}
-
 // Per-query anim context. Built once per sim update; the per-frame tick
 // reads delta_max_mm and the base opacities, then drives mesh.scale and
 // material/uniform alpha to crossfade between the three states.
@@ -117,8 +113,7 @@ export class Scene {
   private onPick: (nodeIx: number) => void;
   private pickables: THREE.Mesh[] = [];
   private raycaster = new THREE.Raycaster();
-  private labelLayer: HTMLDivElement;
-  private labelEntries: LabelEntry[] = [];
+  private labels: Labels;
   private lobeAnims: LobeAnim[] = [];
   private lobeFloor = 0;
   private displayScale_target = 1;
@@ -143,9 +138,7 @@ export class Scene {
     canvas.tabIndex = -1;
     canvas.style.outline = 'none';
 
-    this.labelLayer = document.createElement('div');
-    this.labelLayer.className = 'scene-labels';
-    canvas.parentElement!.appendChild(this.labelLayer);
+    this.labels = new Labels(canvas.parentElement!);
 
     const ro = new ResizeObserver(() => this.onResize());
     ro.observe(canvas);
@@ -163,7 +156,7 @@ export class Scene {
     disposeChildren(this.content);
     this.pickables = [];
     this.lobeAnims = [];
-    this.clearLabels();
+    this.labels.clear();
 
     if (beams.length === 0) {
       this.center.set(0, 0, 0);
@@ -394,17 +387,16 @@ export class Scene {
       // Floating δ label, offset along the beam's walker-up so the label sits
       // off the lobe instead of behind it. Hidden when editor has focus.
       // Clicking the label picks the same node as clicking the lobe.
-      const labelEl = document.createElement('div');
-      labelEl.className = 'scene-label';
-      if (focused) labelEl.classList.add('hidden');
-      if (isSel) labelEl.classList.add('selected');
-      labelEl.textContent = `δ ${formatMm(n.delta_max_mm)}`;
-      const pickIx = ix;
-      labelEl.addEventListener('click', () => this.onPick(pickIx));
-      this.labelLayer.appendChild(labelEl);
       const up = new THREE.Vector3(...beams[n.beamIx]!.startFrame.up);
       const labelPos = worldPos.clone().add(up.multiplyScalar(labelOffset));
-      this.labelEntries.push({ el: labelEl, worldPos: labelPos });
+      const classes: string[] = [];
+      if (focused) classes.push('hidden');
+      if (isSel) classes.push('selected');
+      const pickIx = ix;
+      this.labels.add(`δ ${formatMm(n.delta_max_mm)}`, labelPos, {
+        classes,
+        onClick: () => this.onPick(pickIx),
+      });
     }
   }
 
@@ -453,25 +445,6 @@ export class Scene {
       setLobeOpacity(a.normal, a.normalIsShader, normalOpacity);
       setLobeOpacity(a.under, false, underOpacity);
       setLobeOpacity(a.over, false, overOpacity);
-    }
-  }
-
-  private clearLabels() {
-    for (const e of this.labelEntries) e.el.remove();
-    this.labelEntries = [];
-  }
-
-  private updateLabels() {
-    if (this.labelEntries.length === 0) return;
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
-    const v = new THREE.Vector3();
-    for (const e of this.labelEntries) {
-      v.copy(e.worldPos).project(this.camera);
-      const x = (v.x * 0.5 + 0.5) * w;
-      const y = (-v.y * 0.5 + 0.5) * h;
-      e.el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
     }
   }
 
@@ -580,7 +553,7 @@ export class Scene {
   private refresh() {
     this.updateCamera();
     this.renderer.render(this.root, this.camera);
-    this.updateLabels();
+    this.labels.update(this.camera, this.renderer.domElement);
   }
 
   private updateCamera() {
