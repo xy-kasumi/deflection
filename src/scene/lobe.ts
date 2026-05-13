@@ -327,11 +327,21 @@ export class LobeRenderer {
     if (this.lobeAnims.length === 0) return;
     const floor = this.lobeFloor;
     const scale = this.displayScale_anim;
+    // User's mental model is discrete: {underflow, normal, overflow}. The
+    // crossfade weights only exist to smooth the in-flight scale animation;
+    // when the scale has settled, snap to the dominant state so the steady
+    // image shows exactly one of the three.
+    const settled = scale === this.displayScale_target;
 
     for (const a of this.lobeAnims) {
       const outerMax = a.delta_max_mm * scale;
-      const aUnder = 1 - smoothstep(LOBE_UNDER_BLEND_LO * floor, floor, outerMax);
-      const aOver  =     smoothstep(LOBE_OVER_BLEND_LO * lobeCeilWorld, lobeCeilWorld, outerMax);
+      let aUnder = 1 - smoothstep(LOBE_UNDER_BLEND_LO * floor, floor, outerMax);
+      let aOver  =     smoothstep(LOBE_OVER_BLEND_LO * lobeCeilWorld, lobeCeilWorld, outerMax);
+      if (settled) {
+        if (aOver >= 0.5)        { aOver = 1; aUnder = 0; }
+        else if (aUnder >= 0.5)  { aUnder = 1; aOver = 0; }
+        else                     { aOver = 0; aUnder = 0; }
+      }
 
       // Clamp the normal lobe so it never visibly outgrows the konpeito while
       // they crossfade. delta_max_mm = 0 falls under aUnder=1, so the normal
