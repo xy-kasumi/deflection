@@ -25,3 +25,5 @@ Means: No thin wire pulling, No ultra-fat (compared to length) beams
 ## Development
 
 See [`DSL.md`](DSL.md), [`vocab.md`](vocab.md).
+
+`window.dbg` exposes live `scene` / `sim` / `scale` / `selectedKey` for devtools-console inspection.

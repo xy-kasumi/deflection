@@ -115,3 +115,12 @@ const editor = new Editor(
 );
 
 render();
+
+// Console hook: window.dbg.{scene, sim, scale, ...}. Live objects (not a
+// snapshot) so devtools can drill into THREE internals via reflection.
+(window as unknown as { dbg: unknown }).dbg = {
+  get scene() { return scene; },
+  get sim()   { return lastSim; },
+  get scale() { return currentScale; },
+  get selectedKey() { return selectedKey; },
+};
