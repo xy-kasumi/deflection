@@ -19,9 +19,12 @@ const COLOR_HEADLINE_ARROW = 0xd62828;
 const COLOR_BEAM = 0x9aa0a6;
 const COLOR_BEAM_HIGHLIGHT = 0x2563eb;
 
-// Magnitude bands for lobe rendering, relative to scene `maxDim`.
-const LOBE_FLOOR_REL = 0.005;
-const LOBE_CEIL_REL = 0.5;
+// Magnitude bands for lobe rendering, relative to mean beam length `avgL`.
+// Floor is roughly beamRadius * 1.5 (so the underflow sphere just edges out
+// of the rod); ceiling caps the wireframe well under one beam length so the
+// konpeito (vertex-bumped to ~1.4×) stays visually contained.
+const LOBE_FLOOR_REL = 0.02;
+const LOBE_CEIL_REL = 0.18;
 
 // Click vs drag: pointerup with movement below this threshold (squared, px) is a click.
 const CLICK_MOVE_THRESH_SQ = 16;
@@ -228,7 +231,7 @@ export class Scene {
     const hitRadius = avgL / 25;
     const labelOffset = avgL / 8;
     if (sim && sim.nodes.length > 0) {
-      this.drawDeflection(beams, sim, maxDim, hitRadius, labelOffset, selectedNodeIx, focused);
+      this.drawDeflection(beams, sim, avgL, maxDim, hitRadius, labelOffset, selectedNodeIx, focused);
     }
 
     this.refresh();
@@ -237,14 +240,15 @@ export class Scene {
   private drawDeflection(
     beams: BeamNode[],
     sim: SimResult,
+    avgL: number,
     maxDim: number,
     hitRadius: number,
     labelOffset: number,
     selectedNodeIx: number,
     focused: boolean,
   ): void {
-    const floor = maxDim * LOBE_FLOOR_REL;
-    const ceil = maxDim * LOBE_CEIL_REL;
+    const floor = avgL * LOBE_FLOOR_REL;
+    const ceil = avgL * LOBE_CEIL_REL;
 
     for (let ix = 0; ix < sim.nodes.length; ix++) {
       const n = sim.nodes[ix]!;
