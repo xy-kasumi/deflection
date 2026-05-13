@@ -72,6 +72,10 @@ const YAW_PER_PX = 1 / 150;
 // instead of snapping. Settled tolerance is in log units.
 const SCALE_K = 18;
 const SCALE_SETTLE_LOG = 1e-3;
+// The button set; also the candidate set for auto-pick on node selection.
+// Kept in ascending order so the recommend-scale loop can pick the largest
+// non-overflown by iterating once.
+const DISPLAY_SCALES = [1, 10, 100, 1000] as const;
 
 // Overflow trigger: the konpeito (lobe-too-big) state begins when the lobe
 // would occupy this fraction of the canvas viewport area. Picked from the
@@ -336,6 +340,20 @@ export class Scene {
     if (target === this.displayScale_target) return;
     this.displayScale_target = target;
     this.startAnim();
+  }
+
+  // Largest scale from the button set that keeps the lobe at or below the
+  // overflow threshold. Returns the smallest available scale when every
+  // option overflows (i.e. ×1 is the best we can offer). Zero / negative
+  // delta is degenerate — pick the largest so the choice is unambiguous.
+  recommendDisplayScale(delta_max_mm: number): number {
+    if (delta_max_mm <= 0) return DISPLAY_SCALES[DISPLAY_SCALES.length - 1]!;
+    const ceil = this.computeLobeCeilWorld();
+    let best: number = DISPLAY_SCALES[0]!;
+    for (const s of DISPLAY_SCALES) {
+      if (delta_max_mm * s <= ceil) best = s;
+    }
+    return best;
   }
 
   private drawDeflection(

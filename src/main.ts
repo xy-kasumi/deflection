@@ -30,6 +30,15 @@ const scene = new Scene(canvas, (nodeIx) => {
   const n = lastSim?.nodes[nodeIx];
   if (!n) return;
   selectedKey = { beamIx: n.beamIx, offset_mm: n.offset_mm };
+  // Auto-pick the biggest non-overflown δ-exag for this node so a click is
+  // also a "show me this node clearly" gesture. Initial tip selection stays
+  // at ×1 (this callback only fires on user picks, not on default-select).
+  const recommended = scene.recommendDisplayScale(n.delta_max_mm);
+  if (recommended !== currentScale) {
+    currentScale = recommended;
+    updateScaleButtons();
+    scene.setDisplayScale(recommended);
+  }
   render();
 });
 
