@@ -319,8 +319,13 @@ export class Scene {
       this.drawDeflection(beams, sim, hitRadius, labelOffset, lobeFloor, selectedNodeIx, focused);
     }
 
-    this.refresh();
+    // applyLobeAnim writes scale/opacity onto the freshly built meshes; it
+    // must run before refresh() or the first rendered frame shows lobes at
+    // their default mesh.scale = 1 (konpeito at 1mm, etc.). Canvas-side
+    // pointerdown kicks the rAF loop and hides this; label-click clearly
+    // exposes it because nothing else triggers a re-render.
     this.applyLobeAnim();
+    this.refresh();
   }
 
   setDisplayScale(target: number): void {

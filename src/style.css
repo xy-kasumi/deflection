@@ -197,6 +197,7 @@ html, body {
   white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
+  user-select: none;
 }
 
 .scene-label.selected {
