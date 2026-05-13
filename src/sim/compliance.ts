@@ -48,11 +48,13 @@ export function buildCompliances(
   );
   const mats = matIds.map((id) => MATERIALS[id]);
 
-  // Query nodes: one per beam end (chain joints in source order).
-  const queryNodes: Node[] = beams.map((b, i) => ({
-    beamIx: i,
-    offset_mm: b.length_mm,
-  }));
+  // Query nodes: candidate is each beam's beginning *and* end, deduped by
+  // world position so a beam-end that coincides with the next beam's beginning
+  // is counted once. We drop the origin (always fixed by support(single)),
+  // but keep the tip even for support(both) because the pin-roller solve below
+  // needs its compliance entries — run.ts will hide the constrained tip from
+  // the public node list.
+  const queryNodes: Node[] = buildQueryNodes(beams);
 
   // Load nodes: one per force attachment (in chain order).
   const loadNodes: Node[] = [];
@@ -348,7 +350,7 @@ function applyPinRoller(
   return true;
 }
 
-function getSupportKind(structure: Structure): 'single' | 'both' | undefined {
+export function getSupportKind(structure: Structure): 'single' | 'both' | undefined {
   for (const env of structure.envs) {
     if (env.name !== 'support') continue;
     const arg = env.params[0];
@@ -357,6 +359,32 @@ function getSupportKind(structure: Structure): 'single' | 'both' | undefined {
     }
   }
   return undefined;
+}
+
+const QUERY_POS_EPS = 1e-6;
+function buildQueryNodes(beams: BeamNode[]): Node[] {
+  const out: Node[] = [];
+  const seen: Vec3[] = [];
+  for (let i = 0; i < beams.length; i++) {
+    const b = beams[i]!;
+    const endpoints: { offset_mm: number; world: Vec3 }[] = [
+      { offset_mm: 0, world: b.startFrame.origin },
+      { offset_mm: b.length_mm, world: addV(b.startFrame.origin, scaleV(b.startFrame.fwd, b.length_mm)) },
+    ];
+    for (const e of endpoints) {
+      if (Math.hypot(e.world[0], e.world[1], e.world[2]) < QUERY_POS_EPS) continue; // origin
+      let dup = false;
+      for (const sp of seen) {
+        if (Math.abs(e.world[0] - sp[0]) < QUERY_POS_EPS
+         && Math.abs(e.world[1] - sp[1]) < QUERY_POS_EPS
+         && Math.abs(e.world[2] - sp[2]) < QUERY_POS_EPS) { dup = true; break; }
+      }
+      if (dup) continue;
+      out.push({ beamIx: i, offset_mm: e.offset_mm });
+      seen.push(e.world);
+    }
+  }
+  return out;
 }
 
 function supportFallbackDiag(structure: Structure): Diagnostic {

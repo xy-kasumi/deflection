@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from './walker';
 import type { SimResult } from './sim/run';
+import type { Directional } from './sim/directional';
 
 const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
@@ -182,60 +183,30 @@ export class Scene {
   }
 
   private drawDeformedOverlay(
-    beams: BeamNode[],
+    _beams: BeamNode[],
     sim: SimResult,
     maxDim: number,
-    attachRadius: number,
+    _attachRadius: number,
   ): void {
-    const tipNode = sim.nodes[sim.tipQueryIx];
-    if (!tipNode) return;
+    const headline = sim.nodes[sim.maxNodeIx];
+    if (!headline) return;
 
     const k = sim.display_scale;
 
-    // Build deformed positions per query node, indexed by beamIx so we can
-    // wire them into a polyline that starts at the world origin.
-    const deformedByBeam = new Map<number, THREE.Vector3>();
-    const undeformedByBeam = new Map<number, THREE.Vector3>();
     for (const n of sim.nodes) {
-      const p = new THREE.Vector3(...n.worldPos_undeformed);
-      const dp = p.clone().add(
-        new THREE.Vector3(...n.d_star).multiplyScalar(n.delta_max_mm * k),
-      );
-      deformedByBeam.set(n.queryIx, dp);
-      undeformedByBeam.set(n.queryIx, p);
+      if (!(n.delta_max_mm > 0)) continue;
+      const surface = buildDirectionalSurface(n.directional, k);
+      surface.position.set(...n.worldPos_undeformed);
+      this.content.add(surface);
     }
 
-    const lineMat = new THREE.LineBasicMaterial({
-      color: COLOR_DEFORMED,
-      transparent: true,
-      opacity: 0.9,
-    });
-    const dotMat = new THREE.MeshBasicMaterial({ color: COLOR_DEFORMED });
-    const dotGeom = new THREE.SphereGeometry(attachRadius * 1.1, 10, 6);
-
-    const points: THREE.Vector3[] = [new THREE.Vector3(0, 0, 0)];
-    for (let i = 0; i < beams.length; i++) {
-      const p = deformedByBeam.get(i);
-      if (!p) continue;
-      points.push(p);
-      const dot = new THREE.Mesh(dotGeom, dotMat);
-      dot.position.copy(p);
-      this.content.add(dot);
-    }
-    if (points.length >= 2) {
-      const geom = new THREE.BufferGeometry().setFromPoints(points);
-      this.content.add(new THREE.Line(geom, lineMat));
-    }
-
-    // Tip arrow from undeformed to deformed tip.
-    const tipUn = undeformedByBeam.get(sim.tipQueryIx);
-    const tipDef = deformedByBeam.get(sim.tipQueryIx);
-    if (tipUn && tipDef && tipUn.distanceTo(tipDef) > 1e-6) {
-      const dir = tipDef.clone().sub(tipUn);
-      const len = dir.length();
+    const headlinePos = new THREE.Vector3(...headline.worldPos_undeformed);
+    const d = new THREE.Vector3(...headline.d_star);
+    const len = headline.delta_max_mm * k;
+    if (len > 1e-6) {
       const arrow = new THREE.ArrowHelper(
-        dir.clone().normalize(),
-        tipUn,
+        d.clone().normalize(),
+        headlinePos,
         len,
         COLOR_TIP_ARROW,
         Math.min(len * 0.4, maxDim * 0.05),
@@ -390,6 +361,32 @@ function disposeChildren(group: THREE.Group) {
     }
   });
   group.clear();
+}
+
+// Wireframe icosphere whose vertices are deformed radially by δ(d) · scale.
+// One mesh per query node visualizes how compliant the joint is in every
+// direction: anisotropic chains produce elongated lobes along their weak axes.
+function buildDirectionalSurface(dir: Directional, scale: number): THREE.Mesh {
+  const geom = new THREE.IcosahedronGeometry(1, 3);
+  const pos = geom.attributes.position!;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const len = Math.hypot(x, y, z) || 1;
+    const nx = x / len, ny = y / len, nz = z / len;
+    const r = dir.at([nx, ny, nz]) * scale;
+    pos.setXYZ(i, nx * r, ny * r, nz * r);
+  }
+  pos.needsUpdate = true;
+  geom.computeBoundingSphere();
+  const mat = new THREE.MeshBasicMaterial({
+    color: COLOR_DEFORMED,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.5,
+  });
+  return new THREE.Mesh(geom, mat);
 }
 
 // Keep this export so callers using ...spread-style construction can pass a Vec3.

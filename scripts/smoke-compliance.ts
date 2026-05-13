@@ -7,6 +7,7 @@ import { walk } from '../src/walker';
 import { buildCompliances } from '../src/sim/compliance';
 import { directionalFor } from '../src/sim/directional';
 import { attribute } from '../src/sim/attribute';
+import { runSim } from '../src/sim/run';
 import { MATERIALS, KGF_TO_N } from '../src/state';
 
 function check(name: string, actual: number, expected: number, tolRel = 1e-9): void {
@@ -287,6 +288,59 @@ function check(name: string, actual: number, expected: number, tolRel = 1e-9): v
     .filter((e) => e.queryIx === 0 && e.loadIx === 0 && e.mode === 'bendIx')
     .reduce((s, e) => s + e.C[4]!, 0);
   check('Σ bendIx entries [y,y] = 0', ymode, 0, 1e-12);
+}
+
+// Test 6: queryNodes set — beam beginnings + ends, deduped, origin dropped.
+// 3-beam chain with `mid:` attachment: beam0 begins at origin (dropped),
+// beam0 ends at the parent-midpoint of beam1's start... wait, no — beam1
+// attaches at `mid:` of beam0 so beam1.start = beam0 at offset 150. So:
+//   beam0 start = origin → dropped
+//   beam0 end   = (300, 0, 0)
+//   beam1 start = (150, 0, 0)   (distinct from beam0 end via mid:)
+//   beam1 end   = beam2 start   (deduped)
+//   beam2 end   = tip
+// → 4 surviving queryNodes.
+{
+  const src = 'support(single)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:force(1kgf)';
+  const { structure } = parse(src);
+  const { beams } = walk(structure);
+  const { compliances } = buildCompliances(beams, structure);
+
+  console.log('\n-- Test 6: queryNodes for 3-beam chain with `mid:` --');
+  console.log('queryNodes:', compliances.queryNodes);
+  if (compliances.queryNodes.length !== 4) {
+    console.log(`FAIL: expected 4 queryNodes, got ${compliances.queryNodes.length}`);
+    process.exitCode = 1;
+  } else {
+    console.log(`ok   4 queryNodes (beam1-start at parent midpoint preserved)`);
+  }
+}
+
+// Test 7: support(both) drops the tip from visible nodes; compliance still has
+// the tip for the pin-roller solve (4 queries) but run.ts hides it (3 nodes).
+{
+  const src = 'support(both)\nhorz beam(steel rect(W10 H10) L300)\nmid: right beam(aluminum rect(W10 H10) L150)\ndown beam(plastic rect(W10 H10) L100) end:force(1kgf)';
+  const { structure } = parse(src);
+  const { beams } = walk(structure);
+  const { compliances } = buildCompliances(beams, structure);
+
+  // Compliance keeps the tip query (needed for the solve).
+  const tipIx = compliances.queryNodes.findIndex(
+    (n) => n.beamIx === beams.length - 1 && n.offset_mm === beams[beams.length - 1]!.length_mm,
+  );
+  console.log('\n-- Test 7: support(both) keeps tip in compliance --');
+  if (tipIx < 0) { console.log('FAIL: tip query missing from compliance'); process.exitCode = 1; }
+  else console.log(`ok   tip query at compliance.queryNodes[${tipIx}]`);
+
+  const sim = runSim(beams, structure);
+  console.log(`SimResult.nodes.length = ${sim.nodes.length}, maxNodeIx = ${sim.maxNodeIx}`);
+  const last = beams.length - 1;
+  const tipInNodes = sim.nodes.some((n) => {
+    const qn = compliances.queryNodes[n.queryIx]!;
+    return qn.beamIx === last && qn.offset_mm === beams[last]!.length_mm;
+  });
+  if (tipInNodes) { console.log('FAIL: tip leaked into SimResult.nodes'); process.exitCode = 1; }
+  else console.log('ok   tip hidden from SimResult.nodes');
 }
 
 if (process.exitCode) {

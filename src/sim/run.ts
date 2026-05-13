@@ -1,17 +1,18 @@
 import type { Diagnostic } from '../dsl/diagnostics';
 import type { Structure } from '../dsl/parse';
 import type { BeamNode, Vec3 } from '../walker';
-import { buildCompliances } from './compliance';
-import { directionalFor } from './directional';
+import { buildCompliances, getSupportKind } from './compliance';
+import { directionalFor, type Directional } from './directional';
 import { attribute, type PerBeamAttrib, type PerLoadAttrib } from './attribute';
 
-// Per-query result. world position is the *undeformed* node location; the
-// deformed-chain renderer applies d_star · delta_max_mm · display_scale.
+// Per-query result. `worldPos_undeformed` anchors the directional; `directional`
+// is the full δ(d) function the scene can sample for surface rendering.
 export interface NodeDeflectionResult {
   queryIx: number;
   worldPos_undeformed: Vec3;
   d_star: Vec3;
   delta_max_mm: number;
+  directional: Directional;
 }
 
 export interface SimForce {
@@ -19,7 +20,7 @@ export interface SimForce {
   beamIx: number;
   offset_mm: number;
   Fmax_N: number;
-  delta_mm: number; // signed contribution at the tip query along d_star(tip)
+  delta_mm: number; // signed contribution at the headline query along its d*
   fraction: number;
 }
 
@@ -36,16 +37,18 @@ export type DisplayScale = 1 | 10 | 100 | 1000;
 
 export interface SimResult {
   nodes: NodeDeflectionResult[];
-  tipQueryIx: number;
+  // Index into `nodes` of the node with the largest δ_max — the one whose
+  // direction d* drives the attribution breakdown and the tip arrow.
+  maxNodeIx: number;
   display_scale: DisplayScale;
   forces: SimForce[];
   beams: SimBeam[];
   diagnostics: Diagnostic[];
 }
 
-// Orchestrates compliance build → per-query directional max → tip attribution.
-// Returns a UI-facing SimResult. If the chain has no beams or no loads, returns
-// a degenerate result with all-zero deflections.
+// Orchestrates compliance build → per-query directional max → attribution at
+// the worst-case query node. Constrained-to-zero nodes (the support(both) tip)
+// are hidden from `nodes` even though compliance keeps them for the solve.
 export function runSim(beams: BeamNode[], structure: Structure): SimResult {
   const diagnostics: Diagnostic[] = [];
   if (beams.length === 0) {
@@ -55,8 +58,17 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
   const { compliances, diagnostics: cd } = buildCompliances(beams, structure);
   diagnostics.push(...cd);
 
+  const supportKind = getSupportKind(structure);
+  const lastBeamIx = beams.length - 1;
+  const lastBeamLen = beams[lastBeamIx]!.length_mm;
+
   // Per-query Directional.max() gives (d*, δ_max) for each query node.
-  const nodes: NodeDeflectionResult[] = compliances.queryNodes.map((qn, queryIx) => {
+  const nodes: NodeDeflectionResult[] = [];
+  compliances.queryNodes.forEach((qn, queryIx) => {
+    // For support(both), hide the pinned tip — it has been constrained to
+    // (near-)zero in the perpendicular plane, so visualizing it just adds
+    // a degenerate surface at the chain's end.
+    if (supportKind === 'both' && qn.beamIx === lastBeamIx && qn.offset_mm === lastBeamLen) return;
     const beam = beams[qn.beamIx]!;
     const worldPos: Vec3 = [
       beam.startFrame.origin[0] + beam.startFrame.fwd[0] * qn.offset_mm,
@@ -65,17 +77,30 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
     ];
     const dir = directionalFor(compliances, queryIx);
     const { d, value } = dir.max();
-    return { queryIx, worldPos_undeformed: worldPos, d_star: d, delta_max_mm: value };
+    nodes.push({
+      queryIx,
+      worldPos_undeformed: worldPos,
+      d_star: d,
+      delta_max_mm: value,
+      directional: dir,
+    });
   });
 
-  const tipQueryIx = nodes.length - 1;
-  const tip = nodes[tipQueryIx];
+  let maxNodeIx = -1;
+  let maxVal = -Infinity;
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i]!.delta_max_mm > maxVal) {
+      maxVal = nodes[i]!.delta_max_mm;
+      maxNodeIx = i;
+    }
+  }
 
   let forces: SimForce[] = [];
   let beamAttribs: SimBeam[] = [];
 
-  if (tip && tip.delta_max_mm > 0 && compliances.loadNodes.length > 0) {
-    const attr = attribute(compliances, tipQueryIx, tip.d_star);
+  const headline = maxNodeIx >= 0 ? nodes[maxNodeIx]! : undefined;
+  if (headline && headline.delta_max_mm > 0 && compliances.loadNodes.length > 0) {
+    const attr = attribute(compliances, headline.queryIx, headline.d_star);
     forces = attr.perLoad.map((pl: PerLoadAttrib) => {
       const ln = compliances.loadNodes[pl.loadIx]!;
       return {
@@ -99,7 +124,7 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
 
   return {
     nodes,
-    tipQueryIx,
+    maxNodeIx,
     display_scale: 1,
     forces,
     beams: beamAttribs,
@@ -110,7 +135,7 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
 function emptyResult(): SimResult {
   return {
     nodes: [],
-    tipQueryIx: -1,
+    maxNodeIx: -1,
     display_scale: 1,
     forces: [],
     beams: [],
