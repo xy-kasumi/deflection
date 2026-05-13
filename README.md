@@ -7,8 +7,13 @@ of serial chain of beams.
 
 ## Build / Tests
 
-TBD
-
+```bash
+npm install
+npm run typecheck                     # tsc --noEmit
+npx tsx scripts/smoke-compliance.ts   # sim vs known closed formula
+npm run dev                           # vite dev server
+npm run build                         # static bundle in dist/
+```
 
 ## Development
 
