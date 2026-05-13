@@ -1,8 +1,7 @@
-// Axis convention (immutable for the whole app):
-//   Beam centerline along world +X by default; world up is +Z.
-//   Cross-section local frame: x_section = walker-right, y_section = walker-up.
-//     Ix (about section x) resists bending in walker-up direction.
-//     Iy (about section y) resists bending in walker-right direction.
+// World is right-handed with +Y up (matches three.js default).
+// Beam-local frame: X+ = walker.right, Y+ = walker.up, Z+ = walker.fwd.
+// Ix = ∫y² dA resists deflection in walker-up; Iy = ∫x² dA resists deflection
+// in walker-right.
 
 export type MaterialId = 'plastic' | 'aluminum' | 'steel';
 

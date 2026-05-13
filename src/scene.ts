@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from './walker';
+import type { SimResult, DisplayScale } from './sim/run';
 
 const ISO_YAW_DEG = 45;
 const ISO_PITCH_DEG = -30;
@@ -9,6 +10,10 @@ const COLOR_AXIS = 0xd0d7de;
 const COLOR_JOINT = 0x444b53;
 const COLOR_ATTACHMENT = 0xd97a1a;
 const COLOR_UP_MARKER = 0x2e7d32;
+const COLOR_DEFORMED = 0xd97a1a;
+const COLOR_TIP_ARROW = 0xd62828;
+
+const SCALE_LADDER: DisplayScale[] = [1, 10, 100, 1000, 10000];
 
 const MATERIAL_COLORS: Record<string, number> = {
   plastic: 0xc7b56b,
@@ -63,7 +68,7 @@ export class Scene {
     this.installDrag(canvas);
   }
 
-  update(beams: BeamNode[]): void {
+  update(beams: BeamNode[], sim?: SimResult): void {
     disposeChildren(this.content);
     disposeChildren(this.axes);
 
@@ -170,8 +175,91 @@ export class Scene {
     const maxDim = Math.max(size.x, size.y, size.z);
     this.scaleHalf = Math.max(50, maxDim * 0.8 + Math.max(beamRadius * 6, 10));
 
+    if (sim && sim.nodes.length > 0) {
+      this.drawDeformedOverlay(beams, sim, maxDim, attachRadius);
+    }
+
     this.rebuildAxes(bbox);
     this.refresh();
+  }
+
+  // Decide a display scale that makes the deformation visible without being
+  // absurd: pick the largest scale where (scale · δ_max) is at most ~20% of
+  // the chain's longest dimension.
+  static chooseDisplayScale(delta_max_mm: number, chain_max_dim_mm: number): DisplayScale {
+    if (!(delta_max_mm > 0) || !(chain_max_dim_mm > 0)) return 1;
+    const cap = chain_max_dim_mm * 0.2;
+    let chosen: DisplayScale = 1;
+    for (const s of SCALE_LADDER) {
+      if (s * delta_max_mm <= cap) chosen = s;
+      else break;
+    }
+    return chosen;
+  }
+
+  private drawDeformedOverlay(
+    beams: BeamNode[],
+    sim: SimResult,
+    maxDim: number,
+    attachRadius: number,
+  ): void {
+    const tipNode = sim.nodes[sim.tipQueryIx];
+    if (!tipNode) return;
+
+    sim.display_scale = Scene.chooseDisplayScale(tipNode.delta_max_mm, maxDim);
+    const k = sim.display_scale;
+
+    // Build deformed positions per query node, indexed by beamIx so we can
+    // wire them into a polyline that starts at the world origin.
+    const deformedByBeam = new Map<number, THREE.Vector3>();
+    const undeformedByBeam = new Map<number, THREE.Vector3>();
+    for (const n of sim.nodes) {
+      const p = new THREE.Vector3(...n.worldPos_undeformed);
+      const dp = p.clone().add(
+        new THREE.Vector3(...n.d_star).multiplyScalar(n.delta_max_mm * k),
+      );
+      deformedByBeam.set(n.queryIx, dp);
+      undeformedByBeam.set(n.queryIx, p);
+    }
+
+    const lineMat = new THREE.LineBasicMaterial({
+      color: COLOR_DEFORMED,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const dotMat = new THREE.MeshBasicMaterial({ color: COLOR_DEFORMED });
+    const dotGeom = new THREE.SphereGeometry(attachRadius * 1.1, 10, 6);
+
+    const points: THREE.Vector3[] = [new THREE.Vector3(0, 0, 0)];
+    for (let i = 0; i < beams.length; i++) {
+      const p = deformedByBeam.get(i);
+      if (!p) continue;
+      points.push(p);
+      const dot = new THREE.Mesh(dotGeom, dotMat);
+      dot.position.copy(p);
+      this.content.add(dot);
+    }
+    if (points.length >= 2) {
+      const geom = new THREE.BufferGeometry().setFromPoints(points);
+      this.content.add(new THREE.Line(geom, lineMat));
+    }
+
+    // Tip arrow from undeformed to deformed tip.
+    const tipUn = undeformedByBeam.get(sim.tipQueryIx);
+    const tipDef = deformedByBeam.get(sim.tipQueryIx);
+    if (tipUn && tipDef && tipUn.distanceTo(tipDef) > 1e-6) {
+      const dir = tipDef.clone().sub(tipUn);
+      const len = dir.length();
+      const arrow = new THREE.ArrowHelper(
+        dir.clone().normalize(),
+        tipUn,
+        len,
+        COLOR_TIP_ARROW,
+        Math.min(len * 0.4, maxDim * 0.05),
+        Math.min(len * 0.25, maxDim * 0.03),
+      );
+      this.content.add(arrow);
+    }
   }
 
   private rebuildAxes(bbox: THREE.Box3): void {
@@ -261,15 +349,16 @@ export class Scene {
     const sy = Math.sin(this.yaw);
     const cy = Math.cos(this.yaw);
     const r = 4 * this.scaleHalf;
+    // Y-up world orbit: yaw around +Y, elev tilts toward +Y.
     this.camera.position.set(
       target.x + r * ce * sy,
-      target.y - r * ce * cy,
-      target.z + r * se,
+      target.y + r * se,
+      target.z + r * ce * cy,
     );
     if (Math.abs(ce) < 0.01) {
-      this.camera.up.set(-sy, cy, 0);
+      this.camera.up.set(sy, 0, cy);
     } else {
-      this.camera.up.set(0, 0, 1);
+      this.camera.up.set(0, 1, 0);
     }
     this.camera.lookAt(target);
 

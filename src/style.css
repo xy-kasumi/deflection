@@ -25,10 +25,66 @@ html, body {
 }
 
 #editor {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   font-size: 14.3px;
+  overflow: hidden;
 }
+
+#readout {
+  flex: 0 0 auto;
+  max-height: 45%;
+  overflow-y: auto;
+  border-top: 1px solid #d8dce2;
+  padding: 10px 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: #fbfbfd;
+  color: #1f2328;
+  white-space: pre-wrap;
+}
+
+#readout .ro-headline {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #1f2328;
+}
+
+#readout .ro-scale {
+  color: #6a737d;
+  margin-left: 6px;
+}
+
+#readout .ro-section {
+  margin-top: 8px;
+  color: #6a737d;
+}
+
+#readout .ro-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  color: #1f2328;
+}
+
+#readout .ro-row .frac {
+  color: #6a737d;
+}
+
+#readout .ro-bar {
+  display: inline-block;
+  height: 6px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+#readout .ro-bar.ax  { background: #6a737d; }
+#readout .ro-bar.bx  { background: #2e7d32; }
+#readout .ro-bar.by  { background: #2563eb; }
+#readout .ro-bar.tor { background: #d97a1a; }
+
+#readout .ro-empty { color: #8a929a; font-style: italic; }
 
 /* CodeMirror tuning */
 .cm-editor {

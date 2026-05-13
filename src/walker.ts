@@ -4,14 +4,14 @@ import type { Attachment, BeamDef, LocSpec, Structure } from './dsl/parse';
 
 // Walker forward kinematics over the serial beam chain.
 //
-// Frame convention: right-handed with F × R = U.
+// World is right-handed with Y up (matches three.js default).
+// Frame convention per beam: right-handed with F × R = U.
 // Root is gravity-anchored:
-//   horz → F=+X, R=+Y, U=+Z
-//   up   → F=+Z, R=+Y, U=-X   (pitch-up from horz)
-//   down → F=-Z, R=+Y, U=+X   (pitch-down from horz)
+//   horz → F=+X, R=-Z, U=+Y
+//   up   → F=+Y, R=-Z, U=-X   (pitch-up from horz)
+//   down → F=-Y, R=-Z, U=+X   (pitch-down from horz)
 // Non-root: take parent's frame at the attachment offset, then turn:
-//   right → F=-R, R=F, U=U     (yaw — walker turns to their right; new fwd
-//                               points away from parent's right hand)
+//   right → F=-R, R=F, U=U     (yaw — walker turns to their right)
 //   left  → F=R, R=-F, U=U
 //   up    → F=U, U=-F, R=R     (pitch)
 //   down  → F=-U, U=F, R=R
@@ -80,11 +80,11 @@ function rootFrame(dir: Dir): Frame {
   const origin: Vec3 = [0, 0, 0];
   switch (dir) {
     case 'up':
-      return { origin, fwd: [0, 0, 1], right: [0, 1, 0], up: [-1, 0, 0] };
+      return { origin, fwd: [0, 1, 0], right: [0, 0, -1], up: [-1, 0, 0] };
     case 'down':
-      return { origin, fwd: [0, 0, -1], right: [0, 1, 0], up: [1, 0, 0] };
+      return { origin, fwd: [0, -1, 0], right: [0, 0, -1], up: [1, 0, 0] };
     default: // horz, and left/right on root fall through to horz
-      return { origin, fwd: [1, 0, 0], right: [0, 1, 0], up: [0, 0, 1] };
+      return { origin, fwd: [1, 0, 0], right: [0, 0, -1], up: [0, 1, 0] };
   }
 }
 
