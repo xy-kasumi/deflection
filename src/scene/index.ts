@@ -294,13 +294,15 @@ function disposeChildren(group: THREE.Group) {
   group.traverse((obj) => {
     const o = obj as THREE.Object3D & {
       geometry?: THREE.BufferGeometry;
-      material?: THREE.Material | THREE.Material[];
     };
     if (o.geometry) o.geometry.dispose();
-    if (o.material) {
-      if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
-      else o.material.dispose();
-    }
+    // Materials are intentionally NOT disposed here. THREE's WebGLPrograms
+    // cache is refcounted: disposing every material of a given kind drops the
+    // program refcount to zero, deleting the program, forcing a recompile on
+    // the next build (~30ms across our basic-material zoo). Letting materials
+    // become unreferenced and GC'd preserves the program cache. Scene
+    // materials are small (no textures, simple uniforms) and the build
+    // frequency is human-driven, so memory growth is negligible.
   });
   group.clear();
 }

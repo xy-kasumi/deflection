@@ -16,33 +16,49 @@ import type { Vec3 } from '../walker';
 
 export interface DirectionalSample { d: Vec3; value: number; }
 
+// One {N, F} pair in the sum δ(d) = Σ F·|N·d|. The Minkowski sum interpretation
+// from the file header: each term is a load's contribution as an ellipsoid
+// support function.
+export interface DeltaTerm { N: Mat3; F: number; }
+
 export interface Directional {
   at(d: Vec3): number;
   max(): { d: Vec3; value: number };
   sample(nDirs: number): DirectionalSample[];
+  // Raw terms for callers that need the matrices directly (e.g. shader
+  // uniforms or sparse spot-check against a GPU-side δ).
+  terms(): readonly DeltaTerm[];
+}
+
+// Canonical evaluation of δ on a *unit* direction. The lobe vertex shader is
+// a line-for-line GLSL twin of this function; the sparse cpuDelta spot-check
+// in the lobe geometry halo-paints any per-vertex disagreement, so the two
+// implementations must stay in sync.
+export function delta(d_unit: Vec3, terms: readonly DeltaTerm[]): number {
+  let s = 0;
+  for (const { N, F } of terms) {
+    const v = matVec(N, d_unit);
+    s += F * Math.hypot(v[0], v[1], v[2]);
+  }
+  return s;
 }
 
 // Build a Directional for query q. Internally caches C_tot[q][p]^T per load.
 export function directionalFor(c: Compliances, queryIx: number): Directional {
-  const Ns: { N: Mat3; F: number }[] = [];
+  const ts: DeltaTerm[] = [];
   for (const t of c.totals) {
     if (t.queryIx !== queryIx) continue;
-    Ns.push({ N: transpose(t.C), F: c.loadFmax_N[t.loadIx] ?? 0 });
+    ts.push({ N: transpose(t.C), F: c.loadFmax_N[t.loadIx] ?? 0 });
   }
 
   function at(d: Vec3): number {
     const dn = normalizeOrZero(d);
     if (dn === null) return 0;
-    let s = 0;
-    for (const { N, F } of Ns) {
-      const v = matVec(N, dn);
-      s += F * Math.hypot(v[0], v[1], v[2]);
-    }
-    return s;
+    return delta(dn, ts);
   }
 
   function findMax(): { d: Vec3; value: number } {
-    if (Ns.length === 0) return { d: [1, 0, 0], value: 0 };
+    if (ts.length === 0) return { d: [1, 0, 0], value: 0 };
 
     let best: { d: Vec3; value: number } | null = null;
     // Multiple seeds to escape any flat region; convex max means any single
@@ -57,7 +73,7 @@ export function directionalFor(c: Compliances, queryIx: number): Directional {
       for (let iter = 0; iter < 60; iter++) {
         // Gradient ∇δ(d) = Σ_p F_p · N_p^T · (N_p d) / |N_p d|
         const g: Vec3 = [0, 0, 0];
-        for (const { N, F } of Ns) {
+        for (const { N, F } of ts) {
           const v = matVec(N, d);
           const mag = Math.hypot(v[0], v[1], v[2]);
           if (mag < 1e-30) continue;
@@ -97,7 +113,7 @@ export function directionalFor(c: Compliances, queryIx: number): Directional {
     return out;
   }
 
-  return { at, max: findMax, sample };
+  return { at, max: findMax, sample, terms: () => ts };
 }
 
 // ---------- local math helpers ----------
