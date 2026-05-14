@@ -1,13 +1,13 @@
-import type { Diagnostic } from '../dsl/diagnostics';
+import type { Diagnostic, Span } from '../dsl/diagnostics';
 import type { Structure } from '../dsl/parse';
 import type { BeamNode, Vec3 } from '../walker';
 import { buildCompliances, getSupportKind, getTipLoc } from './compliance';
 import { directionalFor, type Directional } from './directional';
-import { attribute, type PerBeamAttrib, type PerLoadAttrib } from './attribute';
+import { decompose, type PerBeamContribution, type PerLoadContribution } from './decompose';
 
 // Per-query result. Carries both the directional max (d*, δ_max) and the
-// per-load / per-beam attribution along that d*, so any node can be selected
-// in the UI without re-running the math.
+// per-load / per-beam contribution breakdown along that d*, so any node can be
+// selected in the UI without re-running the math.
 export interface NodeDeflectionResult {
   queryIx: number;
   beamIx: number;
@@ -24,6 +24,12 @@ export interface SimLoad {
   loadIx: number;
   beamIx: number;
   offset_mm: number;
+  // 'user': explicit load() attachment. 'mass_accel': mass·accel body load.
+  source: 'user' | 'mass_accel';
+  // DSL span of the originating load() attachment ('user' loads only).
+  sourceSpan: Span | null;
+  // Body mass ('mass_accel' loads only).
+  mass_kg: number | null;
   Fmax_N: number;
   delta_mm: number; // signed contribution at this query along its d*
   fraction: number;
@@ -46,9 +52,10 @@ export interface SimResult {
   diagnostics: Diagnostic[];
 }
 
-// Orchestrates compliance build → per-query directional max → attribution at
-// the worst-case query node. The root beam's end (clamped under support(both))
-// is hidden from `nodes` even though compliance keeps it for the solve.
+// Orchestrates compliance build → per-query directional max → contribution
+// breakdown at the worst-case query node. The root beam's end (clamped under
+// support(both)) is hidden from `nodes` even though compliance keeps it for
+// the solve.
 export function runSim(beams: BeamNode[], structure: Structure): SimResult {
   const diagnostics: Diagnostic[] = [];
   if (beams.length === 0) {
@@ -62,7 +69,7 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
   const rootBeamLen = beams[0]!.length_mm;
 
   // Per-query Directional.max() gives (d*, δ_max) for each query node. We
-  // also attribute along d* eagerly so the UI can switch selection without
+  // also decompose along d* eagerly so the UI can switch selection without
   // recomputing — the cost is small (a few O(L·B·modes) matvecs per node).
   const nodes: NodeDeflectionResult[] = [];
   compliances.queryNodes.forEach((qn, queryIx) => {
@@ -81,21 +88,27 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
     const { d, value } = dir.max();
 
     let loads: SimLoad[] = [];
-    let beamAttribs: SimBeam[] = [];
+    let beamContribs: SimBeam[] = [];
     if (value > 0 && compliances.loadNodes.length > 0) {
-      const attr = attribute(compliances, queryIx, d);
-      loads = attr.perLoad.map((pl: PerLoadAttrib) => {
+      const decomp = decompose(compliances, queryIx, d);
+      loads = decomp.perLoad.flatMap((pl: PerLoadContribution) => {
         const ln = compliances.loadNodes[pl.loadIx]!;
-        return {
+        // Synthetic clamp loads are popped before Compliances is returned;
+        // guard defensively so `source` narrows to the public union.
+        if (ln.source === 'clamp') return [];
+        return [{
           loadIx: pl.loadIx,
           beamIx: ln.beamIx,
           offset_mm: ln.offset_mm,
+          source: ln.source,
+          sourceSpan: ln.sourceSpan,
+          mass_kg: ln.mass_kg,
           Fmax_N: compliances.loadFmax_N[pl.loadIx] ?? 0,
           delta_mm: pl.signed_mm,
           fraction: pl.fraction,
-        };
+        }];
       });
-      beamAttribs = attr.perBeam.map((pb: PerBeamAttrib) => ({
+      beamContribs = decomp.perBeam.map((pb: PerBeamContribution) => ({
         beamIx: pb.beamIx,
         total_fraction: pb.total_fraction,
         bendIx_fraction: pb.bendIx_fraction,
@@ -113,7 +126,7 @@ export function runSim(beams: BeamNode[], structure: Structure): SimResult {
       delta_max_mm: value,
       directional: dir,
       loads,
-      beams: beamAttribs,
+      beams: beamContribs,
     });
   });
 

@@ -1,4 +1,4 @@
-import type { Diagnostic } from '../dsl/diagnostics';
+import type { Diagnostic, Span } from '../dsl/diagnostics';
 import type { Attachment, Structure } from '../dsl/parse';
 import { G_M_PER_S2, KGF_TO_N, MATERIALS, type MaterialId } from '../state';
 import type { BeamNode, Frame, Vec3 } from '../walker';
@@ -22,8 +22,21 @@ export interface Node {
 // for the fixed-fixed clamp-moment reaction, paired with a synthetic
 // clamp-force reaction. After the fixed-fixed adjust both synthetic loads
 // are popped, so externally `loadNodes` is all 'force'.
+//
+// `source` records where the load came from: an explicit `load()` attachment
+// ('user'), the `mass_accel` body load ('mass_accel'), or a synthetic
+// fixed-fixed clamp reaction ('clamp'). 'clamp' nodes are popped before the
+// Compliances are returned, so externally `source` is 'user' | 'mass_accel'.
+// `sourceSpan` is the DSL span of the originating `load()` attachment, set
+// only for 'user' loads. `mass_kg` is the body mass, set only for
+// 'mass_accel' loads. Both null otherwise.
+// FIXME: sourceSpan/mass_kg are reconciliation metadata that doesn't belong
+// in sim/ — provenance should be structural keys, resolved by the caller.
 export interface LoadNode extends Node {
   kind: 'force' | 'moment';
+  source: 'user' | 'mass_accel' | 'clamp';
+  sourceSpan: Span | null;
+  mass_kg: number | null;
 }
 
 export interface ComplianceEntry {
@@ -88,7 +101,7 @@ export function buildCompliances(
       if (att.def.name !== 'load') continue;
       const F = loadMagnitudeN(att.def);
       if (F <= 0) continue;
-      loadNodes.push({ beamIx: i, offset_mm: att.local_mm, kind: 'force' });
+      loadNodes.push({ beamIx: i, offset_mm: att.local_mm, kind: 'force', source: 'user', sourceSpan: att.def.span, mass_kg: null });
       loadFmax_N.push(F);
     }
   }
@@ -118,7 +131,7 @@ export function buildCompliances(
       const mass_kg = rho * A * b.length_mm;
       const F_N = mass_kg * accel_m_s2;
       if (F_N <= 0) continue;
-      loadNodes.push({ beamIx: i, offset_mm: b.length_mm / 2, kind: 'force' });
+      loadNodes.push({ beamIx: i, offset_mm: b.length_mm / 2, kind: 'force', source: 'mass_accel', sourceSpan: null, mass_kg });
       loadFmax_N.push(F_N);
     }
   }
@@ -134,10 +147,10 @@ export function buildCompliances(
   if (fixedFixed) {
     const rootEnd = beams[0]!.length_mm;
     clampForceLoadIx = loadNodes.length;
-    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'force' });
+    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'force', source: 'clamp', sourceSpan: null, mass_kg: null });
     loadFmax_N.push(0); // placeholder; reaction is derived, not user-supplied.
     clampMomentLoadIx = loadNodes.length;
-    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'moment' });
+    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'moment', source: 'clamp', sourceSpan: null, mass_kg: null });
     loadFmax_N.push(0);
   }
 
@@ -350,7 +363,7 @@ export function buildCompliances(
 //                  + C_tot[q][clamp_force]  · R_world[p]
 //                  + C_tot[q][clamp_moment] · M_world[p]
 //
-// Per-(beam, mode) attribution uses the same recipe on each (b, m) entry.
+// Per-(beam, mode) contributions use the same recipe on each (b, m) entry.
 function applyFixedFixed(
   beams: BeamNode[],
   queryNodes: Node[],

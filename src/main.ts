@@ -71,7 +71,7 @@ function render() {
     { currentBeamIx, focused: editorFocused },
     selectedNodeIx,
   );
-  renderReadout(infoEl, sim, selectedNodeIx);
+  renderReadout(infoEl, sim, selectedNodeIx, lastSrc);
   updateScaleButtons();
 }
 

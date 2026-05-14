@@ -82,8 +82,12 @@ html, body {
 
 #info .ro-headline {
   font-weight: 600;
-  margin-bottom: 6px;
   color: var(--text-fg);
+}
+
+#info .ro-subhead {
+  margin-bottom: 6px;
+  color: var(--text-muted);
 }
 
 #info .ro-section {
@@ -98,8 +102,30 @@ html, body {
   color: var(--text-fg);
 }
 
-#info .ro-row .frac {
+#info .ro-loads {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  column-gap: 12px;
+  color: var(--text-fg);
+}
+
+#info .ro-loads .force,
+#info .ro-loads .delta {
   color: var(--text-muted);
+  text-align: right;
+}
+
+#info .ro-row .frac,
+#info .ro-loads .frac {
+  color: var(--text-muted);
+  text-align: right;
+}
+
+#info .ro-beamtag {
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
 }
 
 #info .ro-bar {

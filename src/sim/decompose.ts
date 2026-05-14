@@ -1,25 +1,26 @@
 import type { Compliances, Mat3, Mode } from './compliance';
 import type { Vec3 } from '../walker';
 
-// Per-(load, beam, mode) attribution at a fixed query q and direction d.
+// Decomposes δ_q(d) into per-(load, beam, mode) contributions at a fixed
+// query q and direction d.
 //
 // For each load p:
 //   F_p*  =  F_max_p · (C_tot[q][p]ᵀ · d) / |C_tot[q][p]ᵀ · d|
 //
-// Per-(load, beam, mode) signed projection on d:
+// Per-(load, beam, mode) signed contribution (projection on d):
 //   contrib(d; q, p, b, m)  =  ⟨ d , C[q][p][b][m] · F_p* ⟩
 //
 // Telescoping sums (exact, no triangle-inequality slop):
 //   Σ_{b,m} contrib(d; q, p, ·, ·)  =  F_max_p · | C_tot[q][p]ᵀ · d |
 //   Σ_p     ( ... )                  =  δ_q(d)
 
-export interface PerLoadAttrib {
+export interface PerLoadContribution {
   loadIx: number;
   signed_mm: number;
   fraction: number;
 }
 
-export interface PerBeamAttrib {
+export interface PerBeamContribution {
   beamIx: number;
   total_fraction: number;
   bendIx_fraction: number;
@@ -27,13 +28,13 @@ export interface PerBeamAttrib {
   torsion_fraction: number;
 }
 
-export interface AttributionResult {
+export interface Decomposition {
   delta_mm: number; // δ_q(d)
-  perLoad: PerLoadAttrib[];
-  perBeam: PerBeamAttrib[];
+  perLoad: PerLoadContribution[];
+  perBeam: PerBeamContribution[];
 }
 
-export function attribute(c: Compliances, queryIx: number, d: Vec3): AttributionResult {
+export function decompose(c: Compliances, queryIx: number, d: Vec3): Decomposition {
   const dn = normalizeOrZero(d);
   if (dn === null) {
     return { delta_mm: 0, perLoad: [], perBeam: [] };
@@ -58,7 +59,7 @@ export function attribute(c: Compliances, queryIx: number, d: Vec3): Attribution
   const delta = perLoadMag.reduce((s, m) => s + m, 0);
   const dInv = delta > 1e-30 ? 1 / delta : 0;
 
-  const perLoad: PerLoadAttrib[] = perLoadMag.map((signed, loadIx) => ({
+  const perLoad: PerLoadContribution[] = perLoadMag.map((signed, loadIx) => ({
     loadIx,
     signed_mm: signed,
     fraction: signed * dInv,
@@ -83,7 +84,7 @@ export function attribute(c: Compliances, queryIx: number, d: Vec3): Attribution
     bs[modeKey(e.mode)] += signed;
   }
 
-  const perBeam: PerBeamAttrib[] = Array.from(perBeamMap.entries())
+  const perBeam: PerBeamContribution[] = Array.from(perBeamMap.entries())
     .sort(([a], [b]) => a - b)
     .map(([beamIx, bs]) => ({
       beamIx,
