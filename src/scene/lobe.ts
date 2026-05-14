@@ -238,7 +238,7 @@ export class LobeRenderer {
 
     for (let ix = 0; ix < sim.queryResults.length; ix++) {
       const n = sim.queryResults[ix]!;
-      const delta_max_mm = n.deflection_mm.max().value;
+      const delta_max_mm = n.deflection.max().value;
       const isSel = ix === opts.selectedNodeIx;
       const worldPos = new THREE.Vector3(...n.pos_mm);
 
@@ -247,7 +247,7 @@ export class LobeRenderer {
       // replaced by a continuous crossfade. Base opacities preserve the prior
       // per-state look at each crossfade endpoint.
       const reuseMat = this.normalMatPool[ix];
-      const normal = buildNormalLobe(n.deflection_mm, reuseMat);
+      const normal = buildNormalLobe(n.deflection, reuseMat);
       if (!reuseMat) this.normalMatPool[ix] = normal.material as THREE.ShaderMaterial;
       normal.position.copy(worldPos);
       meshes.push(normal);

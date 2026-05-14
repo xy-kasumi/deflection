@@ -23,7 +23,7 @@ export function renderBreakdown(
 
   const sel = sim.queryResults[selectedNodeIx];
   if (!sel) return;
-  const deltaMax = sel.deflection_mm.max().value;
+  const deltaMax = sel.deflection.max().value;
 
   // Header: the δ value, then where it's measured.
   const headline = document.createElement('div');

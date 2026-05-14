@@ -32,12 +32,12 @@ export interface DeflectionQueryResult {
   /** Undeformed position. */
   pos_mm: Vec3;
   /** Full δ(dir) distribution. */
-  deflection_mm: Directional;
-  /** Per-beam (and per-mode) δ in isolation; do not sum to deflection_mm. */
+  deflection: Directional;
+  /** Per-beam (and per-mode) δ in isolation; do not sum to deflection. */
   beamDeflections: BeamDeflection[];
-  /** `deflection_mm.max()` broken down per contributing load. */
+  /** `deflection.max()` broken down per contributing load. */
   loads: LoadContribution[];
-  /** `deflection_mm.max()` broken down per contributing beam. */
+  /** `deflection.max()` broken down per contributing beam. */
   beams: BeamContribution[];
   /** The per-load worst-case forces that realize δ toward `dir`. */
   forcesAt(dir: Vec3): Force[];
@@ -46,14 +46,14 @@ export interface DeflectionQueryResult {
 export interface LoadContribution {
   loadIx: number;
   load: Load;
-  /** signed contribution along deflection_mm.max() */
+  /** signed contribution along deflection.max() */
   delta_mm: number;
 }
 
 export interface BeamContribution {
   beamIx: number;
   beam: Beam;
-  /** signed total along deflection_mm.max() (= sum of the 3 below) */
+  /** signed total along deflection.max() (= sum of the 3 below) */
   delta_mm: number;
   delta_mm_bendIx: number;
   delta_mm_bendIy: number;
@@ -155,7 +155,7 @@ export function simulate(problem: Problem): SimOutcome {
       queryIx,
       query,
       pos_mm: worldPos,
-      deflection_mm: deflection,
+      deflection: deflection,
       beamDeflections: beamDirectionals(compliances, queryIx),
       loads,
       beams: beamContribs,
