@@ -124,7 +124,7 @@ export function simErrorToDiagnostic(err: SimError, ls: LoadSystem): Diagnostic 
 // walker frame {fwd, right, up} → sim frame {axial, ex, ey}.
 function toSimFrame(b: BeamNode): Frame {
   const f = b.startFrame;
-  return { origin: f.origin, ex: f.right, ey: f.up, axial: f.fwd };
+  return { origin_mm: f.origin, ex: f.right, ey: f.up, axial: f.fwd };
 }
 
 // ---------- queries (was sim/compliance.ts buildQueryNodes + getTipLoc) ----------

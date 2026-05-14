@@ -43,9 +43,9 @@ function expect(name: string, cond: boolean): void {
 }
 
 // A 'horz' cantilever beam: axial=+X, ex=-Z, ey=+Y (the walker horz root frame).
-function horzBeam(origin: Vec3, length_mm: number): Beam {
+function horzBeam(origin_mm: Vec3, length_mm: number): Beam {
   return {
-    frame: { origin, ex: [0, 0, -1], ey: [0, 1, 0], axial: [1, 0, 0] },
+    frame: { origin_mm, ex: [0, 0, -1], ey: [0, 1, 0], axial: [1, 0, 0] },
     length_mm,
     section: RECT_10,
     material: STEEL,
@@ -85,7 +85,7 @@ function singleCantilever(): Problem {
   console.log('\n-- Test 2: horz→up two-beam chain, C_tot --');
   // Beam1 is beam0's 'up' turn: origin at beam0's tip, axial=+Y.
   const beam1: Beam = {
-    frame: { origin: [L, 0, 0], ex: [0, 0, -1], ey: [-1, 0, 0], axial: [0, 1, 0] },
+    frame: { origin_mm: [L, 0, 0], ex: [0, 0, -1], ey: [-1, 0, 0], axial: [0, 1, 0] },
     length_mm: L,
     section: RECT_10,
     material: STEEL,
@@ -116,11 +116,11 @@ function singleCantilever(): Problem {
   } else {
     const q = out.queryResults[0]!;
     const expBend = (KGF_TO_N * L ** 3) / (3 * EIx);
-    check('δ(+y) = F·L³/(3·E·Ix)', q.deflection.at([0, 1, 0]), expBend);
-    checkNear0('δ(+x) = 0 (axially rigid)', q.deflection.at([1, 0, 0]));
-    const { d, value } = q.deflection.max();
+    check('δ(+y) = F·L³/(3·E·Ix)', q.deflection_mm.at([0, 1, 0]), expBend);
+    checkNear0('δ(+x) = 0 (axially rigid)', q.deflection_mm.at([1, 0, 0]));
+    const { dir, value } = q.deflection_mm.max();
     check('δ_max = F·L³/(3·E·Ix)', value, expBend);
-    expect('d* lies in the YZ plane (chord is rigid)', Math.abs(d[0]) < 1e-3);
+    expect('d* lies in the YZ plane (chord is rigid)', Math.abs(dir[0]) < 1e-3);
     check('Σ load contributions = δ_max', q.loads.reduce((s, l) => s + l.delta_mm, 0), value, 1e-9);
     check('Σ beam contributions = δ_max', q.beams.reduce((s, b) => s + b.delta_mm, 0), value, 1e-9);
   }
@@ -143,7 +143,7 @@ function singleCantilever(): Problem {
       const b = dec.perBeam[0]!;
       check('beam0 total = bendIx (pure bend at d=+y)', b.total_mm, b.bendIx_mm);
       checkNear0('beam0 bendIy = 0', b.bendIy_mm);
-      checkNear0('beam0 torsion = 0', b.torsion_mm);
+      checkNear0('beam0 torsion = 0', b.torsionJ_mm);
     }
   }
 }

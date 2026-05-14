@@ -16,14 +16,16 @@ export interface SimError {
   message: string;
 }
 
-// Per-query result. `deflection` is the full δ(d) distribution; the headline
-// (d*, δ_max) comes from `deflection.max()`. `loads` / `beams` break that max
-// down so a query can be selected in the UI without re-running the math.
+// Per-query result. `deflection_mm` is the full δ(dir) distribution; the
+// headline (d*, δ_max) comes from `deflection_mm.max()`. `loads` / `beams`
+// break that max down so a query can be selected in the UI without re-running
+// the math. All vectors here are world-frame; `pos_mm` is the undeformed
+// reference position.
 export interface DeflectionQueryResult {
   queryIx: number;
   query: DeflectionQuery;
-  worldPos_undeformed: Vec3;
-  deflection: Directional;
+  pos_mm: Vec3;
+  deflection_mm: Directional;
   loads: LoadContribution[];
   beams: BeamContribution[];
 }
@@ -31,16 +33,16 @@ export interface DeflectionQueryResult {
 export interface LoadContribution {
   loadIx: number;
   load: Load;
-  delta_mm: number; // signed contribution along deflection.max()
+  delta_mm: number; // signed contribution along deflection_mm.max()
 }
 
 export interface BeamContribution {
   beamIx: number;
   beam: Beam;
-  delta_mm: number; // signed total along deflection.max() (= sum of the 3 below)
+  delta_mm: number; // signed total along deflection_mm.max() (= sum of the 3 below)
   delta_mm_bendIx: number;
   delta_mm_bendIy: number;
-  delta_mm_torsion: number;
+  delta_mm_torsionJ: number;
 }
 
 // Connectivity tolerance: walker-built chains are exact to float precision, so
@@ -68,17 +70,17 @@ export function simulate(problem: Problem): SimOutcome {
     const query = problem.queries[queryIx]!;
     const beam = beams[query.beamIx]!;
     const worldPos: Vec3 = [
-      beam.frame.origin[0] + beam.frame.axial[0] * query.offset_mm,
-      beam.frame.origin[1] + beam.frame.axial[1] * query.offset_mm,
-      beam.frame.origin[2] + beam.frame.axial[2] * query.offset_mm,
+      beam.frame.origin_mm[0] + beam.frame.axial[0] * query.offset_mm,
+      beam.frame.origin_mm[1] + beam.frame.axial[1] * query.offset_mm,
+      beam.frame.origin_mm[2] + beam.frame.axial[2] * query.offset_mm,
     ];
     const deflection = directionalFor(compliances, queryIx);
-    const { d, value } = deflection.max();
+    const { dir, value } = deflection.max();
 
     let loads: LoadContribution[] = [];
     let beamContribs: BeamContribution[] = [];
     if (value > 0 && compliances.loadNodes.length > 0) {
-      const decomp = decompose(compliances, queryIx, d);
+      const decomp = decompose(compliances, queryIx, dir);
       loads = decomp.perLoad.map((pl) => ({
         loadIx: pl.loadIx,
         load: problem.loads[pl.loadIx]!,
@@ -90,15 +92,15 @@ export function simulate(problem: Problem): SimOutcome {
         delta_mm: pb.total_mm,
         delta_mm_bendIx: pb.bendIx_mm,
         delta_mm_bendIy: pb.bendIy_mm,
-        delta_mm_torsion: pb.torsion_mm,
+        delta_mm_torsionJ: pb.torsionJ_mm,
       }));
     }
 
     queryResults.push({
       queryIx,
       query,
-      worldPos_undeformed: worldPos,
-      deflection,
+      pos_mm: worldPos,
+      deflection_mm: deflection,
       loads,
       beams: beamContribs,
     });
@@ -113,7 +115,7 @@ function validate(problem: Problem): SimError | null {
   const beams = problem.beams;
   if (beams.length === 0) return null;
 
-  const o = beams[0]!.frame.origin;
+  const o = beams[0]!.frame.origin_mm;
   if (Math.hypot(o[0], o[1], o[2]) > CONNECT_EPS_MM) {
     return {
       kind: 'error',
@@ -124,8 +126,8 @@ function validate(problem: Problem): SimError | null {
 
   for (let i = 1; i < beams.length; i++) {
     const parent = beams[i - 1]!;
-    const child = beams[i]!.frame.origin;
-    const p = parent.frame.origin;
+    const child = beams[i]!.frame.origin_mm;
+    const p = parent.frame.origin_mm;
     const a = parent.frame.axial;
     const rel: Vec3 = [child[0] - p[0], child[1] - p[1], child[2] - p[2]];
     const s = rel[0] * a[0] + rel[1] * a[1] + rel[2] * a[2]; // projection onto the unit axis

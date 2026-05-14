@@ -8,7 +8,10 @@ export type Mat3 = [
   number, number, number,
 ];
 
-export type Mode = 'torsion' | 'bendIx' | 'bendIy';
+// Deflection modes. bendIx is resisted by section Ix → deflects in beam-Y;
+// bendIy is resisted by Iy → deflects in beam-X; torsionJ twists about the
+// beam axis (resisted by J).
+export type Mode = 'torsionJ' | 'bendIx' | 'bendIy';
 
 export interface Node {
   beamIx: number;
@@ -93,7 +96,7 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
   // Precompute per-beam rotation matrix R_i (frame columns) and tip world pos.
   const Rs: Mat3[] = beams.map((b) => frameToR(b.frame));
   const tipWorld: Vec3[] = beams.map((b) =>
-    addV(b.frame.origin, scaleV(b.frame.axial, b.length_mm)),
+    addV(b.frame.origin_mm, scaleV(b.frame.axial, b.length_mm)),
   );
 
   const entries: ComplianceEntry[] = [];
@@ -116,7 +119,7 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
     const k = ln.beamIx;
     const s_p = ln.offset_mm;
     const loadWorldPos = addV(
-      beams[k]!.frame.origin,
+      beams[k]!.frame.origin_mm,
       scaleV(beams[k]!.frame.axial, s_p),
     );
 
@@ -125,7 +128,7 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
       const m = qn.beamIx;
       const s_q = qn.offset_mm;
       const queryWorldPos = addV(
-        beams[m]!.frame.origin,
+        beams[m]!.frame.origin_mm,
         scaleV(beams[m]!.frame.axial, s_q),
       );
 
@@ -210,7 +213,7 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
           }
         }
 
-        if (!isZeroMat(eTorsion)) { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'torsion', C: eTorsion }); addMat(totalC, eTorsion); }
+        if (!isZeroMat(eTorsion)) { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'torsionJ', C: eTorsion }); addMat(totalC, eTorsion); }
         if (!isZeroMat(eBendIx))  { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'bendIx',  C: eBendIx  }); addMat(totalC, eBendIx); }
         if (!isZeroMat(eBendIy))  { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'bendIy',  C: eBendIy  }); addMat(totalC, eBendIy); }
       }
@@ -302,7 +305,7 @@ function applyFixedFixed(
   const rootBeam = beams[clampForceNode.beamIx];
   if (!rootBeam) return false;
   const clampWorld: Vec3 = addV(
-    rootBeam.frame.origin,
+    rootBeam.frame.origin_mm,
     scaleV(rootBeam.frame.axial, clampForceNode.offset_mm),
   );
   const chordLen = Math.hypot(clampWorld[0], clampWorld[1], clampWorld[2]);
@@ -379,7 +382,7 @@ function applyFixedFixed(
   }
 
   // Adjust every real-load entry: direct + via clamp-force·R + via clamp-moment·M.
-  const allModes: Mode[] = ['torsion', 'bendIx', 'bendIy'];
+  const allModes: Mode[] = ['torsionJ', 'bendIx', 'bendIy'];
   const adjusted = new Map<string, Mat3>();
   for (let q = 0; q < queryNodes.length; q++) {
     for (let p = 0; p < realLoadCount; p++) {

@@ -21,10 +21,10 @@ export interface PerLoadContribution {
 
 export interface PerBeamContribution {
   beamIx: number;
-  total_mm: number; // = bendIx_mm + bendIy_mm + torsion_mm
+  total_mm: number; // = bendIx_mm + bendIy_mm + torsionJ_mm
   bendIx_mm: number;
   bendIy_mm: number;
-  torsion_mm: number;
+  torsionJ_mm: number;
 }
 
 export interface Decomposition {
@@ -32,8 +32,8 @@ export interface Decomposition {
   perBeam: PerBeamContribution[];
 }
 
-export function decompose(c: Compliances, queryIx: number, d: Vec3): Decomposition {
-  const dn = normalizeOrZero(d);
+export function decompose(c: Compliances, queryIx: number, dir: Vec3): Decomposition {
+  const dn = normalizeOrZero(dir);
   if (dn === null) {
     return { perLoad: [], perBeam: [] };
   }
@@ -60,7 +60,7 @@ export function decompose(c: Compliances, queryIx: number, d: Vec3): Decompositi
   }));
 
   // Walk entries, accumulating per-beam, per-mode signed contributions.
-  type BeamSums = { total: number; bendIx: number; bendIy: number; torsion: number; };
+  type BeamSums = { total: number; bendIx: number; bendIy: number; torsionJ: number; };
   const perBeamMap = new Map<number, BeamSums>();
   for (const e of c.entries) {
     if (e.queryIx !== queryIx) continue;
@@ -71,7 +71,7 @@ export function decompose(c: Compliances, queryIx: number, d: Vec3): Decompositi
 
     let bs = perBeamMap.get(e.beamIx);
     if (!bs) {
-      bs = { total: 0, bendIx: 0, bendIy: 0, torsion: 0 };
+      bs = { total: 0, bendIx: 0, bendIy: 0, torsionJ: 0 };
       perBeamMap.set(e.beamIx, bs);
     }
     bs.total += signed;
@@ -85,13 +85,13 @@ export function decompose(c: Compliances, queryIx: number, d: Vec3): Decompositi
       total_mm: bs.total,
       bendIx_mm: bs.bendIx,
       bendIy_mm: bs.bendIy,
-      torsion_mm: bs.torsion,
+      torsionJ_mm: bs.torsionJ,
     }));
 
   return { perLoad, perBeam };
 }
 
-function modeKey(m: Mode): 'bendIx' | 'bendIy' | 'torsion' {
+function modeKey(m: Mode): 'bendIx' | 'bendIy' | 'torsionJ' {
   return m;
 }
 

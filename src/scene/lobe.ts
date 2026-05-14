@@ -238,16 +238,16 @@ export class LobeRenderer {
 
     for (let ix = 0; ix < sim.queryResults.length; ix++) {
       const n = sim.queryResults[ix]!;
-      const delta_max_mm = n.deflection.max().value;
+      const delta_max_mm = n.deflection_mm.max().value;
       const isSel = ix === opts.selectedNodeIx;
-      const worldPos = new THREE.Vector3(...n.worldPos_undeformed);
+      const worldPos = new THREE.Vector3(...n.pos_mm);
 
       // All three states are built up-front. The per-frame tick scales/fades
       // them according to the animated δ-exag; categorical state-switching is
       // replaced by a continuous crossfade. Base opacities preserve the prior
       // per-state look at each crossfade endpoint.
       const reuseMat = this.normalMatPool[ix];
-      const normal = buildNormalLobe(n.deflection, reuseMat);
+      const normal = buildNormalLobe(n.deflection_mm, reuseMat);
       if (!reuseMat) this.normalMatPool[ix] = normal.material as THREE.ShaderMaterial;
       normal.position.copy(worldPos);
       meshes.push(normal);

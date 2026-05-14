@@ -14,7 +14,7 @@ import type { Vec3 } from './problem';
 // handful of iterations for any reasonable problem. `sample` returns a
 // quasi-uniform grid on S² for visualization.
 
-export interface DirectionalSample { d: Vec3; value: number; }
+export interface DirectionalSample { dir: Vec3; value: number; }
 
 // One {N, F} pair in the sum δ(d) = Σ F·|N·d|. The Minkowski sum interpretation
 // from the file header: each term is a load's contribution as an ellipsoid
@@ -22,8 +22,8 @@ export interface DirectionalSample { d: Vec3; value: number; }
 export interface DeltaTerm { N: Mat3; F: number; }
 
 export interface Directional {
-  at(d: Vec3): number;
-  max(): { d: Vec3; value: number };
+  at(dir: Vec3): number;
+  max(): { dir: Vec3; value: number };
   sample(nDirs: number): DirectionalSample[];
   // Raw terms for callers that need the matrices directly (e.g. shader
   // uniforms or sparse spot-check against a GPU-side δ).
@@ -51,16 +51,16 @@ export function directionalFor(c: Compliances, queryIx: number): Directional {
     ts.push({ N: transpose(t.C), F: c.loadFmax_N[t.loadIx] ?? 0 });
   }
 
-  function at(d: Vec3): number {
-    const dn = normalizeOrZero(d);
+  function at(dir: Vec3): number {
+    const dn = normalizeOrZero(dir);
     if (dn === null) return 0;
     return delta(dn, ts);
   }
 
-  function findMax(): { d: Vec3; value: number } {
-    if (ts.length === 0) return { d: [1, 0, 0], value: 0 };
+  function findMax(): { dir: Vec3; value: number } {
+    if (ts.length === 0) return { dir: [1, 0, 0], value: 0 };
 
-    let best: { d: Vec3; value: number } | null = null;
+    let best: { dir: Vec3; value: number } | null = null;
     // Multiple seeds to escape any flat region; convex max means any single
     // seed almost always converges, but seeding with axes is cheap insurance.
     const seeds: Vec3[] = [
@@ -94,7 +94,7 @@ export function directionalFor(c: Compliances, queryIx: number): Directional {
         }
         d = gn; val = newVal;
       }
-      if (!best || val > best.value) best = { d, value: val };
+      if (!best || val > best.value) best = { dir: d, value: val };
     }
     return best!;
   }
@@ -108,7 +108,7 @@ export function directionalFor(c: Compliances, queryIx: number): Directional {
       const r = Math.sqrt(Math.max(0, 1 - z * z));
       const phi = golden * i;
       const d: Vec3 = [r * Math.cos(phi), r * Math.sin(phi), z];
-      out.push({ d, value: at(d) });
+      out.push({ dir: d, value: at(d) });
     }
     return out;
   }

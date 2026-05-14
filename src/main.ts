@@ -33,7 +33,7 @@ const scene = new Scene(canvas, (nodeIx) => {
   // Auto-pick the biggest non-overflown δ-exag for this node so a click is
   // also a "show me this node clearly" gesture. Initial tip selection stays
   // at ×1 (this callback only fires on user picks, not on default-select).
-  const recommended = scene.recommendDisplayScale(n.deflection.max().value);
+  const recommended = scene.recommendDisplayScale(n.deflection_mm.max().value);
   if (recommended !== currentScale) {
     currentScale = recommended;
     updateScaleButtons();

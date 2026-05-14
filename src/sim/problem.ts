@@ -1,17 +1,17 @@
 // sim/'s input contract — a self-contained "deflection problem". Pure data,
-// zero imports. Units: mm, N, MPa. No DSL, no spans, no unit provenance.
+// zero imports. Standard units: mm, N, MPa.
 //
 // Preconditions (validated by `simulate`, see simulate.ts):
 //   - the chain is serial: beams[i] hangs off beams[i-1].
-//   - beams[0].frame.origin is the clamp, at world [0, 0, 0].
-//   - beams[i>0].frame.origin lies on beam i-1's axis within [0, length].
+//   - beams[0].frame.origin_mm is the clamp, at world [0, 0, 0].
+//   - beams[i>0].frame.origin_mm lies on beam i-1's axis within [0, length].
 
 export type Vec3 = [number, number, number];
 
 // Beam-local frame expressed in world coords. (ex, ey) span the cross-sectional
 // plane; axial is the beam axis. Orthonormal right-handed: ex × ey = axial.
 export interface Frame {
-  origin: Vec3;
+  origin_mm: Vec3;
   ex: Vec3;
   ey: Vec3;
   axial: Vec3;

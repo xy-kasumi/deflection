@@ -23,7 +23,7 @@ export function renderBreakdown(
 
   const sel = sim.queryResults[selectedNodeIx];
   if (!sel) return;
-  const deltaMax = sel.deflection.max().value;
+  const deltaMax = sel.deflection_mm.max().value;
 
   // Header: the δ value, then where it's measured.
   const headline = document.createElement('div');
@@ -59,7 +59,7 @@ export function renderBreakdown(
         name,
         fracCell(fractionOf(b.delta_mm_bendIx, deltaMax)),
         fracCell(fractionOf(b.delta_mm_bendIy, deltaMax)),
-        fracCell(fractionOf(b.delta_mm_torsion, deltaMax)),
+        fracCell(fractionOf(b.delta_mm_torsionJ, deltaMax)),
         fracCell(fractionOf(b.delta_mm, deltaMax), true),
       );
     }
