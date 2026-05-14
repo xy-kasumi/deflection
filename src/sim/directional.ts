@@ -1,6 +1,6 @@
 import type { Compliances, Mat3, Mode } from './compliance';
 import type { Vec3 } from './problem';
-import type { BeamDeflection } from './simulate';
+import type { BeamDeflection, LoadDeflection } from './simulate';
 
 // Directional distribution at a query node q:
 //
@@ -92,6 +92,25 @@ export function beamDirectionals(c: Compliances, queryIx: number): BeamDeflectio
         deflection: makeDirectional(termsOf(m, c)),
       })),
     }));
+}
+
+/**
+ * δ restricted to each load in isolation — that load alone, worst-cased over
+ * its own force direction. Like beamDirectionals, these do NOT sum to the
+ * whole-structure Directional, but Σ over loads (or beams, or modes) of the
+ * isolated lobes IS exact and equals the pessimistic sum.
+ */
+export function loadDirectionals(c: Compliances, queryIx: number): LoadDeflection[] {
+  const byLoad = new Map<number, DeltaTerm[]>();
+  for (const e of c.entries) {
+    if (e.queryIx !== queryIx) continue;
+    let ts = byLoad.get(e.loadIx);
+    if (!ts) { ts = []; byLoad.set(e.loadIx, ts); }
+    ts.push({ N: transpose(e.C), F: c.loadFmax_N[e.loadIx] ?? 0 });
+  }
+  return [...byLoad.entries()]
+    .sort(([a], [z]) => a - z)
+    .map(([loadIx, ts]) => ({ loadIx, deflection: makeDirectional(ts) }));
 }
 
 // Build the δ(d) = Σ F·|N·d| evaluator over a fixed term list.
