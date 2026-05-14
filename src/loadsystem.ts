@@ -6,7 +6,6 @@
 
 import type { Diagnostic, Span } from './dsl/diagnostics';
 import type { Attachment, BeamDef, Param, Structure } from './dsl/parse';
-import { G_M_PER_S2, KGF_TO_N, MATERIALS, type MaterialId } from './state';
 import type { BeamNode } from './walker';
 import type {
   Beam,
@@ -227,6 +226,27 @@ function getMassAccel_m_s2(structure: Structure): number {
   if (unit === 'm/s2') return value;
   return value * G_M_PER_S2;
 }
+
+// ---------- materials & unit constants ----------
+
+export type MaterialId = 'plastic' | 'aluminum' | 'steel';
+
+interface MaterialProps {
+  E_MPa: number;            // Young's modulus  [N/mm^2]
+  G_MPa: number;            // Shear modulus    [N/mm^2]
+  rho_kg_per_mm3: number;   // Density          [kg/mm^3]
+}
+
+// Categorical single-value approximations — these are typical numbers, not
+// specific alloys. Suitable for back-of-envelope (±20%) stiffness sizing.
+const MATERIALS: Record<MaterialId, MaterialProps> = {
+  plastic:  { E_MPa:   3_500, G_MPa:  1_300, rho_kg_per_mm3: 1.20e-6 },
+  aluminum: { E_MPa:  70_000, G_MPa: 26_000, rho_kg_per_mm3: 2.70e-6 },
+  steel:    { E_MPa: 200_000, G_MPa: 79_000, rho_kg_per_mm3: 7.85e-6 },
+};
+
+const KGF_TO_N = 9.80665;
+const G_M_PER_S2 = 9.80665;
 
 // ---------- load magnitude (was sim/compliance.ts) ----------
 
