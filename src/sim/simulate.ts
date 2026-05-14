@@ -1,5 +1,6 @@
 import type { Beam, DeflectionQuery, Load, Problem, Vec3 } from './problem';
 import { buildCompliances } from './compliance';
+import type { Compliances, Mat3, Mode } from './compliance';
 import { directionalFor, type Directional } from './directional';
 import { decompose } from './decompose';
 
@@ -9,6 +10,11 @@ export interface SimResult {
   kind: 'ok';
   /** 1:1 with Problem.queries, same order */
   queryResults: DeflectionQueryResult[];
+  /**
+   * Apply concrete per-load forces → fully determined, trivially decomposable
+   * deflections. Reuses cached compliances; no structural re-solve.
+   */
+  under(forces: Force[]): DeterminedResult;
 }
 
 export interface SimError {
@@ -50,6 +56,37 @@ export interface BeamContribution {
   delta_mm_torsionJ: number;
 }
 
+export interface Force {
+  loadIx: number;
+  /** World-frame force vector applied at the load node. */
+  F_N: Vec3;
+}
+
+/** Deflection at every query under one concrete set of per-load forces. */
+export interface DeterminedResult {
+  /** The applied forces, echoed back. */
+  forces: Force[];
+  /** 1:1 with Problem.queries, same order. */
+  queryResults: DeterminedDeflection[];
+}
+
+/**
+ * A fully determined deflection: forces are concrete, so the response is a
+ * linear system and every contribution list below sums exactly to `vector_mm`.
+ */
+export interface DeterminedDeflection {
+  queryIx: number;
+  pos_mm: Vec3;
+  vector_mm: Vec3;
+  perLoad: { loadIx: number; vector_mm: Vec3 }[];
+  /** Ordered root → tip. */
+  perBeam: {
+    beamIx: number;
+    vector_mm: Vec3;
+    byMode: { mode: Mode; vector_mm: Vec3 }[];
+  }[];
+}
+
 // Connectivity tolerance: walker-built chains are exact to float precision, so
 // anything beyond this is a genuinely disconnected input.
 const CONNECT_EPS_MM = 1e-6;
@@ -64,7 +101,7 @@ export function simulate(problem: Problem): SimOutcome {
 
   const beams = problem.beams;
   if (beams.length === 0) {
-    return { kind: 'ok', queryResults: [] };
+    return { kind: 'ok', queryResults: [], under: (forces) => ({ forces, queryResults: [] }) };
   }
 
   const compliances = buildCompliances(problem);
@@ -113,7 +150,81 @@ export function simulate(problem: Problem): SimOutcome {
     });
   }
 
-  return { kind: 'ok', queryResults };
+  return {
+    kind: 'ok',
+    queryResults,
+    under: (forces) => applyForces(compliances, queryResults, forces),
+  };
+}
+
+// Apply concrete per-load forces over the cached compliances. Pure linear
+// superposition: each entry contributes C·F, accumulated per load / beam /
+// (beam, mode). No re-solve.
+function applyForces(
+  c: Compliances,
+  queryResults: DeflectionQueryResult[],
+  forces: Force[],
+): DeterminedResult {
+  const F: Vec3[] = c.loadNodes.map(() => [0, 0, 0]);
+  for (const f of forces) {
+    if (f.loadIx >= 0 && f.loadIx < F.length) F[f.loadIx] = f.F_N;
+  }
+
+  const out: DeterminedDeflection[] = queryResults.map((qr) => {
+    const q = qr.queryIx;
+    const total: Vec3 = [0, 0, 0];
+    const perLoadMap = new Map<number, Vec3>();
+    const perBeamMap = new Map<number, { vector_mm: Vec3; byMode: Map<Mode, Vec3> }>();
+
+    for (const e of c.entries) {
+      if (e.queryIx !== q) continue;
+      const cf = matVec(e.C, F[e.loadIx]!);
+      addInto(total, cf);
+
+      let pl = perLoadMap.get(e.loadIx);
+      if (!pl) { pl = [0, 0, 0]; perLoadMap.set(e.loadIx, pl); }
+      addInto(pl, cf);
+
+      let pb = perBeamMap.get(e.beamIx);
+      if (!pb) { pb = { vector_mm: [0, 0, 0], byMode: new Map() }; perBeamMap.set(e.beamIx, pb); }
+      addInto(pb.vector_mm, cf);
+      let bm = pb.byMode.get(e.mode);
+      if (!bm) { bm = [0, 0, 0]; pb.byMode.set(e.mode, bm); }
+      addInto(bm, cf);
+    }
+
+    return {
+      queryIx: q,
+      pos_mm: qr.pos_mm,
+      vector_mm: total,
+      perLoad: [...perLoadMap.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([loadIx, vector_mm]) => ({ loadIx, vector_mm })),
+      perBeam: [...perBeamMap.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([beamIx, v]) => ({
+          beamIx,
+          vector_mm: v.vector_mm,
+          byMode: [...v.byMode.entries()].map(([mode, vector_mm]) => ({ mode, vector_mm })),
+        })),
+    };
+  });
+
+  return { forces, queryResults: out };
+}
+
+function matVec(M: Mat3, v: Vec3): Vec3 {
+  return [
+    M[0] * v[0] + M[1] * v[1] + M[2] * v[2],
+    M[3] * v[0] + M[4] * v[1] + M[5] * v[2],
+    M[6] * v[0] + M[7] * v[1] + M[8] * v[2],
+  ];
+}
+
+function addInto(a: Vec3, b: Vec3): void {
+  a[0] += b[0];
+  a[1] += b[1];
+  a[2] += b[2];
 }
 
 // Validate sim/'s structural preconditions: the chain is serial, clamped at
