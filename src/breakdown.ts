@@ -1,7 +1,18 @@
-import type { SimResult } from './sim/simulate';
+import type { SimResult, DeflectionQueryResult } from './sim/simulate';
+import { sumDirectionals, type Directional } from './sim/directional';
 import type { Load, Vec3 } from './sim/problem';
 import type { Mode } from './sim/compliance';
 import type { LoadProvenance } from './loadsystem';
+
+export type DisplayMode = 'simple' | 'realistic';
+
+// The Directional a query node's lobe represents under the current mode.
+// Realistic: the true worst-case δ. Simple: the pessimistic sum of the
+// per-(beam,mode) parts — an upper bound on δ (Σ ≥ δ, triangle inequality).
+export function displayDirectional(n: DeflectionQueryResult, mode: DisplayMode): Directional {
+  if (mode === 'realistic') return n.deflection;
+  return sumDirectionals(n.beamDeflections.flatMap((b) => b.byMode.map((m) => m.deflection)));
+}
 
 // Renders the deflection breakdown pane into #info. Plain DOM, no framework.
 // Keep this file impl-agnostic about how SimResult was built: it only reads.
@@ -16,6 +27,7 @@ export function renderBreakdown(
   selectedNodeIx: number,
   tipNodeIx: number,
   src: string,
+  mode: DisplayMode,
 ): void {
   el.innerHTML = '';
 
@@ -33,10 +45,13 @@ export function renderBreakdown(
   // exactly-additive per-beam / per-load contributions (projected onto d*).
   const dd = sim.under(sel.forcesAt(dir)).queryResults[selectedNodeIx];
 
-  // Header: the δ value, then where it's measured.
+  // Header: the δ value, then where it's measured. Simple mode shows the
+  // pessimistic bound it renders (δ ≲ …); the beams/loads below stay the
+  // exact d* decomposition regardless of mode.
   const headline = document.createElement('div');
   headline.className = 'bd-headline';
-  headline.textContent = `δ ≈ ${formatMm(deltaMax)}`;
+  const headlineDelta = mode === 'simple' ? displayDirectional(sel, mode).max().value : deltaMax;
+  headline.textContent = `δ ${mode === 'simple' ? '≲' : '≈'} ${formatMm(headlineDelta)}`;
   el.appendChild(headline);
 
   const subhead = document.createElement('div');

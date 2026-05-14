@@ -58,6 +58,38 @@ html, body {
   overflow: hidden;
 }
 
+#mode-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-app);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  user-select: none;
+}
+
+#mode-toggle button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-fg);
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+#mode-toggle button:hover {
+  background: var(--bg-hover);
+}
+
+#mode-toggle button.active {
+  background: var(--text-fg);
+  color: var(--bg-panel);
+  border-color: var(--text-fg);
+}
+
 #info {
   flex: 2 1 0;
   min-height: 0;

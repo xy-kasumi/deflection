@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
 import { delta, type Directional, type DeltaTerm } from '../sim/directional';
-import { formatMm } from '../breakdown';
+import { formatMm, displayDirectional, type DisplayMode } from '../breakdown';
 import { COLOR, MOTION, hexToVec3 } from './tokens';
 
 // Normal-lobe rendering. Filled mesh with per-vertex t = δ/δ_max. The fragment
@@ -173,6 +173,7 @@ export interface LobeBuildOpts {
   lobeFloor: number;
   selectedNodeIx: number;
   focused: boolean;
+  mode: DisplayMode;
 }
 
 export interface LobeLabelSpec {
@@ -238,7 +239,8 @@ export class LobeRenderer {
 
     for (let ix = 0; ix < sim.queryResults.length; ix++) {
       const n = sim.queryResults[ix]!;
-      const delta_max_mm = n.deflection.max().value;
+      const lobeDir = displayDirectional(n, opts.mode);
+      const delta_max_mm = lobeDir.max().value;
       const isSel = ix === opts.selectedNodeIx;
       const worldPos = new THREE.Vector3(...n.pos_mm);
 
@@ -247,7 +249,7 @@ export class LobeRenderer {
       // replaced by a continuous crossfade. Base opacities preserve the prior
       // per-state look at each crossfade endpoint.
       const reuseMat = this.normalMatPool[ix];
-      const normal = buildNormalLobe(n.deflection, reuseMat);
+      const normal = buildNormalLobe(lobeDir, reuseMat);
       if (!reuseMat) this.normalMatPool[ix] = normal.material as THREE.ShaderMaterial;
       normal.position.copy(worldPos);
       meshes.push(normal);

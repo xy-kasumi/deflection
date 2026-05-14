@@ -5,7 +5,7 @@ import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
 import { buildLoadSystem, simErrorToDiagnostic } from './loadsystem';
 import { simulate, type SimResult } from './sim/simulate';
-import { renderBreakdown } from './breakdown';
+import { renderBreakdown, type DisplayMode } from './breakdown';
 
 const INITIAL_SRC = `support(single)
 mass_accel(2G)
@@ -18,6 +18,7 @@ const editorEl = document.getElementById('editor') as HTMLElement;
 const infoEl = document.getElementById('info') as HTMLElement;
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const scaleOverlayEl = document.getElementById('scale-overlay') as HTMLElement;
+const modeToggleEl = document.getElementById('mode-toggle') as HTMLElement;
 
 let currentScale = 1;
 let lastSrc = INITIAL_SRC;
@@ -25,6 +26,7 @@ let cursorOffset = 0;
 let editorFocused = false;
 let selectedKey: { beamIx: number; offset_mm: number } | null = null;
 let lastSim: SimResult | null = null;
+let mode: DisplayMode = 'realistic';
 
 const scene = new Scene(canvas, (nodeIx) => {
   const n = lastSim?.queryResults[nodeIx];
@@ -68,8 +70,8 @@ function render() {
   if (out.kind === 'error') {
     lastSim = null;
     editor.setDiagnostics([...baseDiags, simErrorToDiagnostic(out, ls)]);
-    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1);
-    renderBreakdown(infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc);
+    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1, mode);
+    renderBreakdown(infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode);
     updateScaleButtons();
     return;
   }
@@ -84,8 +86,9 @@ function render() {
     ls.supportKind,
     { currentBeamIx, focused: editorFocused },
     selectedNodeIx,
+    mode,
   );
-  renderBreakdown(infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc);
+  renderBreakdown(infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode);
   updateScaleButtons();
 }
 
@@ -104,6 +107,12 @@ function updateScaleButtons() {
   }
 }
 
+function updateModeButtons() {
+  for (const btn of modeToggleEl.querySelectorAll('button')) {
+    btn.classList.toggle('active', btn.dataset['mode'] === mode);
+  }
+}
+
 scaleOverlayEl.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('button');
   if (!btn) return;
@@ -112,6 +121,16 @@ scaleOverlayEl.addEventListener('click', (e) => {
   currentScale = s;
   updateScaleButtons();
   scene.setDisplayScale(s);
+});
+
+modeToggleEl.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest('button');
+  if (!btn) return;
+  const m = btn.dataset['mode'] as DisplayMode;
+  if (m === mode) return;
+  mode = m;
+  updateModeButtons();
+  render();
 });
 
 const editor = new Editor(
@@ -128,6 +147,7 @@ const editor = new Editor(
   },
 );
 
+updateModeButtons();
 render();
 
 // Console hook: window.dbg.{scene, sim, scale, ...}. Live objects (not a
@@ -136,5 +156,6 @@ render();
   get scene() { return scene; },
   get sim()   { return lastSim; },
   get scale() { return currentScale; },
+  get mode()  { return mode; },
   get selectedKey() { return selectedKey; },
 };
