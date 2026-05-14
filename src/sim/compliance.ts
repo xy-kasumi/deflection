@@ -1,8 +1,5 @@
-import type { Diagnostic, Span } from '../dsl/diagnostics';
-import type { Attachment, Structure } from '../dsl/parse';
-import { G_M_PER_S2, KGF_TO_N, MATERIALS, type MaterialId } from '../state';
-import type { BeamNode, Frame, Vec3 } from '../walker';
-import { resolveSection, type Section } from './section';
+import type { Beam, Frame, Problem, Vec3 } from './problem';
+import type { SimError } from './simulate';
 
 // 3×3 row-major matrix: [m00, m01, m02, m10, m11, m12, m20, m21, m22].
 export type Mat3 = [
@@ -18,25 +15,14 @@ export interface Node {
   offset_mm: number;
 }
 
-// Load node: 'force' for user-applied loads; 'moment' appears synthetically
-// for the fixed-fixed clamp-moment reaction, paired with a synthetic
-// clamp-force reaction. After the fixed-fixed adjust both synthetic loads
-// are popped, so externally `loadNodes` is all 'force'.
-//
-// `source` records where the load came from: an explicit `load()` attachment
-// ('user'), the `mass_accel` body load ('mass_accel'), or a synthetic
-// fixed-fixed clamp reaction ('clamp'). 'clamp' nodes are popped before the
-// Compliances are returned, so externally `source` is 'user' | 'mass_accel'.
-// `sourceSpan` is the DSL span of the originating `load()` attachment, set
-// only for 'user' loads. `mass_kg` is the body mass, set only for
-// 'mass_accel' loads. Both null otherwise.
-// FIXME: sourceSpan/mass_kg are reconciliation metadata that doesn't belong
-// in sim/ — provenance should be structural keys, resolved by the caller.
+// Load node: 'force' for real loads; 'moment' appears synthetically for the
+// fixed-fixed clamp-moment reaction, paired with a synthetic clamp-force
+// reaction. `source` is 'real' for caller-supplied loads, 'clamp' for the
+// synthetic fixed-fixed reactions — the latter are popped before Compliances
+// is returned, so externally every load is 'real' / 'force'.
 export interface LoadNode extends Node {
   kind: 'force' | 'moment';
-  source: 'user' | 'mass_accel' | 'clamp';
-  sourceSpan: Span | null;
-  mass_kg: number | null;
+  source: 'real' | 'clamp';
 }
 
 export interface ComplianceEntry {
@@ -60,80 +46,31 @@ export interface Compliances {
   totals: { queryIx: number; loadIx: number; C: Mat3 }[];
 }
 
-export function buildCompliances(
-  beams: BeamNode[],
-  structure: Structure,
-): { compliances: Compliances; diagnostics: Diagnostic[] } {
-  const diagnostics: Diagnostic[] = [];
+export function buildCompliances(problem: Problem): Compliances | SimError {
+  const beams = problem.beams;
 
-  // Per-beam section + material.
-  const sections = beams.map((b) => resolveSection(b.def));
-  const matIds: MaterialId[] = beams.map((b) =>
-    isKnownMaterial(b.material) ? (b.material as MaterialId) : 'plastic',
-  );
-  const mats = matIds.map((id) => MATERIALS[id]);
-
-  // Query nodes: candidate is each beam's beginning *and* end, deduped by
-  // world position so a beam-end that coincides with the next beam's beginning
-  // is counted once. Origin is dropped (clamped under any support). The root
-  // beam's end is retained even under support(both) because the fixed-fixed
-  // solve below needs its compliance entries — run.ts hides it from the
-  // public node list.
-  const supportKind = getSupportKind(structure);
-  const queryNodes: Node[] = buildQueryNodes(beams);
-  // Tip: end of last beam, except mid of root beam when there's only one beam
-  // and support(both) (both endpoints clamped). Add explicitly so the readout
-  // and headline arrow always have an anchor.
-  const tipLoc = getTipLoc(beams, supportKind);
-  if (
-    tipLoc &&
-    !queryNodes.some((n) => n.beamIx === tipLoc.beamIx && n.offset_mm === tipLoc.offset_mm)
-  ) {
-    queryNodes.push(tipLoc);
+  // Query nodes: the caller's queries, plus — under support(both) — the root
+  // beam's end. That point is a clamped joint (deflection zero by
+  // construction) so it's not a reported query, but the fixed-fixed
+  // compatibility solve below needs its compliance entries.
+  const queryNodes: Node[] = problem.queries.map((q) => ({
+    beamIx: q.beamIx,
+    offset_mm: q.offset_mm,
+  }));
+  const fixedFixed = problem.support === 'both' && beams.length > 0;
+  if (fixedFixed) {
+    const rootEnd = beams[0]!.length_mm;
+    if (!queryNodes.some((n) => n.beamIx === 0 && n.offset_mm === rootEnd)) {
+      queryNodes.push({ beamIx: 0, offset_mm: rootEnd });
+    }
   }
 
-  // Load nodes: one per load attachment (in chain order).
+  // Load nodes: one per resolved load, in caller order.
   const loadNodes: LoadNode[] = [];
   const loadFmax_N: number[] = [];
-  for (let i = 0; i < beams.length; i++) {
-    const b = beams[i] as BeamNode;
-    for (const att of b.attachmentOffsets) {
-      if (att.def.name !== 'load') continue;
-      const F = loadMagnitudeN(att.def);
-      if (F <= 0) continue;
-      loadNodes.push({ beamIx: i, offset_mm: att.local_mm, kind: 'force', source: 'user', sourceSpan: att.def.span, mass_kg: null });
-      loadFmax_N.push(F);
-    }
-  }
-
-  // Mass-acceleration body load: `mass_accel(a)` (default 1G) adds one
-  // direction-free `mid:load(mass·a)` per beam. The directional optimization
-  // already maximizes over direction per load, so the body load aggregates
-  // the worst-case of gravity / inertial acceleration / vibration without
-  // committing to a global "down" axis.
-  const accel_m_s2 = getMassAccel_m_s2(structure);
-  if (accel_m_s2 > 0) {
-    for (let i = 0; i < beams.length; i++) {
-      const b = beams[i] as BeamNode;
-      const A = sections[i]!.A_mm2;
-      if (A === null || A <= 0) {
-        // section(...) without A: area unknown, so mass·g body load is
-        // skipped silently — warn so the user knows their beam contributes
-        // no self-weight under the active mass_accel.
-        diagnostics.push({
-          severity: 'warning',
-          message: 'section(...) without A: no mass_accel body load for this beam (add A=… to include self-weight)',
-          span: b.def.span,
-        });
-        continue;
-      }
-      const rho = mats[i]!.rho_kg_per_mm3;
-      const mass_kg = rho * A * b.length_mm;
-      const F_N = mass_kg * accel_m_s2;
-      if (F_N <= 0) continue;
-      loadNodes.push({ beamIx: i, offset_mm: b.length_mm / 2, kind: 'force', source: 'mass_accel', sourceSpan: null, mass_kg });
-      loadFmax_N.push(F_N);
-    }
+  for (const ld of problem.loads) {
+    loadNodes.push({ beamIx: ld.beamIx, offset_mm: ld.offset_mm, kind: 'force', source: 'real' });
+    loadFmax_N.push(ld.Fmax_N);
   }
 
   // For support(both), append two synthetic loads at the root beam's end:
@@ -141,23 +78,22 @@ export function buildCompliances(
   // compliance with these extras, then solve a 4×4 compatibility system for
   // the chord-perpendicular reaction components (chord = root beam axis;
   // force/flexibility method).
-  const fixedFixed = supportKind === 'both' && beams.length > 0;
   let clampForceLoadIx = -1;
   let clampMomentLoadIx = -1;
   if (fixedFixed) {
     const rootEnd = beams[0]!.length_mm;
     clampForceLoadIx = loadNodes.length;
-    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'force', source: 'clamp', sourceSpan: null, mass_kg: null });
+    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'force', source: 'clamp' });
     loadFmax_N.push(0); // placeholder; reaction is derived, not user-supplied.
     clampMomentLoadIx = loadNodes.length;
-    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'moment', source: 'clamp', sourceSpan: null, mass_kg: null });
+    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'moment', source: 'clamp' });
     loadFmax_N.push(0);
   }
 
   // Precompute per-beam rotation matrix R_i (frame columns) and tip world pos.
-  const Rs: Mat3[] = beams.map((b) => frameToR(b.startFrame));
+  const Rs: Mat3[] = beams.map((b) => frameToR(b.frame));
   const tipWorld: Vec3[] = beams.map((b) =>
-    addV(b.startFrame.origin, scaleV(b.startFrame.fwd, b.length_mm)),
+    addV(b.frame.origin, scaleV(b.frame.axial, b.length_mm)),
   );
 
   const entries: ComplianceEntry[] = [];
@@ -180,8 +116,8 @@ export function buildCompliances(
     const k = ln.beamIx;
     const s_p = ln.offset_mm;
     const loadWorldPos = addV(
-      beams[k]!.startFrame.origin,
-      scaleV(beams[k]!.startFrame.fwd, s_p),
+      beams[k]!.frame.origin,
+      scaleV(beams[k]!.frame.axial, s_p),
     );
 
     for (let q = 0; q < queryNodes.length; q++) {
@@ -189,8 +125,8 @@ export function buildCompliances(
       const m = qn.beamIx;
       const s_q = qn.offset_mm;
       const queryWorldPos = addV(
-        beams[m]!.startFrame.origin,
-        scaleV(beams[m]!.startFrame.fwd, s_q),
+        beams[m]!.frame.origin,
+        scaleV(beams[m]!.frame.axial, s_q),
       );
 
       const totalC = newMat3();
@@ -198,8 +134,8 @@ export function buildCompliances(
       // Beams that flex from load p AND lie on the chain to the query.
       const iMax = Math.min(k, m);
       for (let i = 0; i <= iMax; i++) {
-        const sect = sections[i]!;
-        const mat = mats[i]!;
+        const sect = beams[i]!.section;
+        const mat = beams[i]!.material;
         const L_i = beams[i]!.length_mm;
         const R_i = Rs[i]!;
         const R_iT = transposeM(R_i);
@@ -289,24 +225,19 @@ export function buildCompliances(
       clampForceLoadIx, clampMomentLoadIx,
     );
     if (!adjusted) {
-      // Couldn't apply (degenerate chord, singular system) — drop both
-      // synthesized clamp loads and fall back to cantilever.
-      const dropIxs = new Set([clampForceLoadIx, clampMomentLoadIx]);
-      // Pop the two synthetic load nodes (added last, so pop twice).
-      loadNodes.pop(); loadFmax_N.pop();
-      loadNodes.pop(); loadFmax_N.pop();
-      for (let i = entries.length - 1; i >= 0; i--) {
-        if (dropIxs.has(entries[i]!.loadIx)) entries.splice(i, 1);
-      }
-      totalsMap.forEach((_, key) => {
-        if (dropIxs.has(Number(key.split(',')[1]))) totalsMap.delete(key);
-      });
-      diagnostics.push(supportFallbackDiag(structure));
-    } else {
-      // Adjustment succeeded; drop the two synthetic clamp loads from public API.
-      loadNodes.pop(); loadFmax_N.pop();
-      loadNodes.pop(); loadFmax_N.pop();
+      // Degenerate chord or singular 4×4 — the support(both) problem can't be
+      // solved. No silent fallback: surface it so the user fixes their input.
+      return {
+        kind: 'error',
+        code: 'support-singular',
+        message:
+          'support(both): the chord is degenerate or the fixed-fixed system is singular ' +
+          '— check for a zero-length root beam or a zero-stiffness section',
+      };
     }
+    // Adjustment succeeded; drop the two synthetic clamp loads from public API.
+    loadNodes.pop(); loadFmax_N.pop();
+    loadNodes.pop(); loadFmax_N.pop();
   }
 
   const totals = Array.from(totalsMap.entries()).map(([key, C]) => {
@@ -314,16 +245,7 @@ export function buildCompliances(
     return { queryIx: q, loadIx: p, C };
   });
 
-  return {
-    compliances: {
-      queryNodes,
-      loadNodes,
-      loadFmax_N,
-      entries,
-      totals,
-    },
-    diagnostics,
-  };
+  return { queryNodes, loadNodes, loadFmax_N, entries, totals };
 }
 
 // ---------- fixed-fixed (support(both)) ----------
@@ -365,7 +287,7 @@ export function buildCompliances(
 //
 // Per-(beam, mode) contributions use the same recipe on each (b, m) entry.
 function applyFixedFixed(
-  beams: BeamNode[],
+  beams: Beam[],
   queryNodes: Node[],
   loadNodes: LoadNode[],
   entries: ComplianceEntry[],
@@ -380,8 +302,8 @@ function applyFixedFixed(
   const rootBeam = beams[clampForceNode.beamIx];
   if (!rootBeam) return false;
   const clampWorld: Vec3 = addV(
-    rootBeam.startFrame.origin,
-    scaleV(rootBeam.startFrame.fwd, clampForceNode.offset_mm),
+    rootBeam.frame.origin,
+    scaleV(rootBeam.frame.axial, clampForceNode.offset_mm),
   );
   const chordLen = Math.hypot(clampWorld[0], clampWorld[1], clampWorld[2]);
   if (chordLen < 1e-9) return false;
@@ -544,86 +466,9 @@ function solve4x3(A: number[], B: number[]): number[] | null {
   return X;
 }
 
-// Acceleration in m/s². Defaults to 1G when no `mass_accel` env is present.
-// Bare numbers and `G`-unit values are scaled by g; `m/s2`-unit values pass
-// through unchanged. Unknown units fall back to scaling by g.
-export function getMassAccel_m_s2(structure: Structure): number {
-  let env;
-  for (const e of structure.envs) {
-    if (e.name === 'mass_accel') { env = e; break; }
-  }
-  if (!env || env.params.length !== 1) return G_M_PER_S2;
-  const p = env.params[0]!;
-  if (p.kind !== 'quantity') return G_M_PER_S2;
-  const { value, unit } = p.quantity;
-  if (!Number.isFinite(value) || value < 0) return G_M_PER_S2;
-  if (unit === 'm/s2') return value;
-  return value * G_M_PER_S2;
-}
-
-// Chain tip per the vocab: end of last beam, except mid of root beam under
-// support(both) with a single beam (both endpoints clamped).
-export function getTipLoc(
-  beams: BeamNode[],
-  supportKind: 'single' | 'both' | undefined,
-): { beamIx: number; offset_mm: number } | null {
-  if (beams.length === 0) return null;
-  if (supportKind === 'both' && beams.length === 1) {
-    return { beamIx: 0, offset_mm: beams[0]!.length_mm / 2 };
-  }
-  const last = beams.length - 1;
-  return { beamIx: last, offset_mm: beams[last]!.length_mm };
-}
-
-export function getSupportKind(structure: Structure): 'single' | 'both' | undefined {
-  for (const env of structure.envs) {
-    if (env.name !== 'support') continue;
-    const arg = env.params[0];
-    if (arg && arg.kind === 'ident' && (arg.name === 'single' || arg.name === 'both')) {
-      return arg.name;
-    }
-  }
-  return undefined;
-}
-
-const QUERY_POS_EPS = 1e-6;
-function buildQueryNodes(beams: BeamNode[]): Node[] {
-  const out: Node[] = [];
-  const seen: Vec3[] = [];
-  for (let i = 0; i < beams.length; i++) {
-    const b = beams[i]!;
-    const endpoints: { offset_mm: number; world: Vec3 }[] = [
-      { offset_mm: 0, world: b.startFrame.origin },
-      { offset_mm: b.length_mm, world: addV(b.startFrame.origin, scaleV(b.startFrame.fwd, b.length_mm)) },
-    ];
-    for (const e of endpoints) {
-      if (Math.hypot(e.world[0], e.world[1], e.world[2]) < QUERY_POS_EPS) continue; // origin
-      let dup = false;
-      for (const sp of seen) {
-        if (Math.abs(e.world[0] - sp[0]) < QUERY_POS_EPS
-         && Math.abs(e.world[1] - sp[1]) < QUERY_POS_EPS
-         && Math.abs(e.world[2] - sp[2]) < QUERY_POS_EPS) { dup = true; break; }
-      }
-      if (dup) continue;
-      out.push({ beamIx: i, offset_mm: e.offset_mm });
-      seen.push(e.world);
-    }
-  }
-  return out;
-}
-
-function supportFallbackDiag(structure: Structure): Diagnostic {
-  const envSpan = structure.envs.find((e) => e.name === 'support')?.span ?? { start: 0, end: 0 };
-  return {
-    severity: 'warning',
-    message: 'support(both): chord is degenerate or 4×4 compliance is singular — falling back to support(single)',
-    span: envSpan,
-  };
-}
-
 // ---------- per-mode formulas ----------
 //
-// Local frame: beam-X = walker.right, beam-Y = walker.up, beam-Z = walker.fwd
+// Local frame: beam-X = frame.ex, beam-Y = frame.ey, beam-Z = frame.axial
 // (along beam). Section Ix = ∫y² dA (about beam-X) → resists deflection in
 // beam-Y; Iy = ∫x² dA (about beam-Y) → resists deflection in beam-X.
 //
@@ -699,28 +544,12 @@ function worldContribution(R: Mat3, mode: ModeOut, arm_world: Vec3): Vec3 {
 
 // ---------- helpers ----------
 
-function isKnownMaterial(s: string | undefined): boolean {
-  return s === 'plastic' || s === 'aluminum' || s === 'steel';
-}
-
-function loadMagnitudeN(att: Attachment): number {
-  if (att.params.length !== 1) return 0;
-  const p = att.params[0]!;
-  if (p.kind !== 'quantity') return 0;
-  const v = p.quantity.value;
-  if (!Number.isFinite(v) || v <= 0) return 0;
-  const unit = p.quantity.unit ?? 'kgf';
-  if (unit === 'N')   return v;
-  if (unit === 'kgf') return v * KGF_TO_N;
-  return v * KGF_TO_N;
-}
-
 function frameToR(f: Frame): Mat3 {
-  // R = [right | up | fwd] as columns (row-major storage).
+  // R = [ex | ey | axial] as columns (row-major storage).
   return [
-    f.right[0], f.up[0], f.fwd[0],
-    f.right[1], f.up[1], f.fwd[1],
-    f.right[2], f.up[2], f.fwd[2],
+    f.ex[0], f.ey[0], f.axial[0],
+    f.ex[1], f.ey[1], f.axial[1],
+    f.ex[2], f.ey[2], f.axial[2],
   ];
 }
 

@@ -1,5 +1,5 @@
 import type { Compliances, Mat3, Mode } from './compliance';
-import type { Vec3 } from '../walker';
+import type { Vec3 } from './problem';
 
 // Decomposes δ_q(d) into per-(load, beam, mode) contributions at a fixed
 // query q and direction d.
@@ -16,20 +16,18 @@ import type { Vec3 } from '../walker';
 
 export interface PerLoadContribution {
   loadIx: number;
-  signed_mm: number;
-  fraction: number;
+  delta_mm: number; // signed contribution to δ along d
 }
 
 export interface PerBeamContribution {
   beamIx: number;
-  total_fraction: number;
-  bendIx_fraction: number;
-  bendIy_fraction: number;
-  torsion_fraction: number;
+  total_mm: number; // = bendIx_mm + bendIy_mm + torsion_mm
+  bendIx_mm: number;
+  bendIy_mm: number;
+  torsion_mm: number;
 }
 
 export interface Decomposition {
-  delta_mm: number; // δ_q(d)
   perLoad: PerLoadContribution[];
   perBeam: PerBeamContribution[];
 }
@@ -37,7 +35,7 @@ export interface Decomposition {
 export function decompose(c: Compliances, queryIx: number, d: Vec3): Decomposition {
   const dn = normalizeOrZero(d);
   if (dn === null) {
-    return { delta_mm: 0, perLoad: [], perBeam: [] };
+    return { perLoad: [], perBeam: [] };
   }
 
   // Per-load optimal force F_p* in world coords, plus the per-load magnitude
@@ -56,13 +54,9 @@ export function decompose(c: Compliances, queryIx: number, d: Vec3): Decompositi
     }
   }
 
-  const delta = perLoadMag.reduce((s, m) => s + m, 0);
-  const dInv = delta > 1e-30 ? 1 / delta : 0;
-
   const perLoad: PerLoadContribution[] = perLoadMag.map((signed, loadIx) => ({
     loadIx,
-    signed_mm: signed,
-    fraction: signed * dInv,
+    delta_mm: signed,
   }));
 
   // Walk entries, accumulating per-beam, per-mode signed contributions.
@@ -88,13 +82,13 @@ export function decompose(c: Compliances, queryIx: number, d: Vec3): Decompositi
     .sort(([a], [b]) => a - b)
     .map(([beamIx, bs]) => ({
       beamIx,
-      total_fraction: bs.total * dInv,
-      bendIx_fraction: bs.bendIx * dInv,
-      bendIy_fraction: bs.bendIy * dInv,
-      torsion_fraction: bs.torsion * dInv,
+      total_mm: bs.total,
+      bendIx_mm: bs.bendIx,
+      bendIy_mm: bs.bendIy,
+      torsion_mm: bs.torsion,
     }));
 
-  return { delta_mm: delta, perLoad, perBeam };
+  return { perLoad, perBeam };
 }
 
 function modeKey(m: Mode): 'bendIx' | 'bendIy' | 'torsion' {

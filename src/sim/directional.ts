@@ -1,5 +1,5 @@
 import type { Compliances, Mat3 } from './compliance';
-import type { Vec3 } from '../walker';
+import type { Vec3 } from './problem';
 
 // Directional distribution at a query node q:
 //

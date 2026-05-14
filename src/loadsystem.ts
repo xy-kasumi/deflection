@@ -18,6 +18,7 @@ import type {
   Section,
   Vec3,
 } from './sim/problem';
+import type { SimError } from './sim/simulate';
 
 // Per-load provenance, parallel to `Problem.loads`. The sim result indexes
 // loads by integer; this lets the UI recover where each load came from.
@@ -32,6 +33,7 @@ export interface LoadSystem {
   loadProvenance: LoadProvenance[];
   tipQueryIx: number; // index into problem.queries, or -1
   supportKind: 'single' | 'both' | undefined; // raw, for scene.update
+  supportSpan: Span | null; // span of the support() env, for error mapping
   diagnostics: Diagnostic[]; // conversion-time issues (e.g. section without A)
 }
 
@@ -40,6 +42,7 @@ export function buildLoadSystem(structure: Structure, beams: BeamNode[]): LoadSy
 
   const supportKind = getSupportKind(structure);
   const support: 'single' | 'both' = supportKind ?? 'single';
+  const supportSpan = structure.envs.find((e) => e.name === 'support')?.span ?? null;
 
   // Per-beam resolved section (incl. area, kept here for body loads) + material.
   const sections = beams.map((b) => resolveSection(b.def));
@@ -101,8 +104,20 @@ export function buildLoadSystem(structure: Structure, beams: BeamNode[]): LoadSy
     loadProvenance,
     tipQueryIx,
     supportKind,
+    supportSpan,
     diagnostics,
   };
+}
+
+// Maps a sim/ failure back to an editor diagnostic. support-singular points at
+// the support() env; the validation errors are caller-side bugs (walker always
+// builds connected, origin-clamped chains) so they get a doc-start span.
+export function simErrorToDiagnostic(err: SimError, ls: LoadSystem): Diagnostic {
+  const span =
+    err.code === 'support-singular'
+      ? ls.supportSpan ?? { start: 0, end: 0 }
+      : { start: 0, end: 0 };
+  return { severity: 'error', message: err.message, span };
 }
 
 // ---------- frame mapping ----------

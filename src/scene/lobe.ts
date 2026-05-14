@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
-import type { SimResult } from '../sim/run';
+import type { SimResult } from '../sim/simulate';
 import { delta, type Directional, type DeltaTerm } from '../sim/directional';
 import { formatMm } from '../readout';
 import { COLOR, MOTION, hexToVec3 } from './tokens';
@@ -236,8 +236,9 @@ export class LobeRenderer {
     const pickables: THREE.Mesh[] = [];
     const labels: LobeLabelSpec[] = [];
 
-    for (let ix = 0; ix < sim.nodes.length; ix++) {
-      const n = sim.nodes[ix]!;
+    for (let ix = 0; ix < sim.queryResults.length; ix++) {
+      const n = sim.queryResults[ix]!;
+      const delta_max_mm = n.deflection.max().value;
       const isSel = ix === opts.selectedNodeIx;
       const worldPos = new THREE.Vector3(...n.worldPos_undeformed);
 
@@ -246,7 +247,7 @@ export class LobeRenderer {
       // replaced by a continuous crossfade. Base opacities preserve the prior
       // per-state look at each crossfade endpoint.
       const reuseMat = this.normalMatPool[ix];
-      const normal = buildNormalLobe(n.directional, reuseMat);
+      const normal = buildNormalLobe(n.deflection, reuseMat);
       if (!reuseMat) this.normalMatPool[ix] = normal.material as THREE.ShaderMaterial;
       normal.position.copy(worldPos);
       meshes.push(normal);
@@ -260,7 +261,7 @@ export class LobeRenderer {
       meshes.push(over);
 
       this.lobeAnims.push({
-        delta_max_mm: n.delta_max_mm,
+        delta_max_mm,
         normalBase: opts.focused ? 0.15 : isSel ? 0.75 : 0.25,
         underBase:  opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
         overBase:   opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
@@ -283,13 +284,13 @@ export class LobeRenderer {
 
       // Floating δ label, offset along the beam's walker-up so the label sits
       // off the lobe instead of behind it.
-      const up = new THREE.Vector3(...beams[n.beamIx]!.startFrame.up);
+      const up = new THREE.Vector3(...beams[n.query.beamIx]!.startFrame.up);
       const labelPos = worldPos.clone().add(up.multiplyScalar(opts.labelOffset));
       const classes: string[] = [];
       if (opts.focused) classes.push('hidden');
       if (isSel) classes.push('selected');
       labels.push({
-        text: `δ ${formatMm(n.delta_max_mm)}`,
+        text: `δ ${formatMm(delta_max_mm)}`,
         worldPos: labelPos,
         nodeIx: ix,
         classes,

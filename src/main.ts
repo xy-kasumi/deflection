@@ -3,8 +3,8 @@ import { Scene } from './scene';
 import { parse, type BeamDef } from './dsl/parse';
 import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
-import { runSim, type SimResult } from './sim/run';
-import { getSupportKind } from './sim/compliance';
+import { buildLoadSystem, simErrorToDiagnostic } from './loadsystem';
+import { simulate, type SimResult } from './sim/simulate';
 import { renderReadout } from './readout';
 
 const INITIAL_SRC = `support(single)
@@ -27,13 +27,13 @@ let selectedKey: { beamIx: number; offset_mm: number } | null = null;
 let lastSim: SimResult | null = null;
 
 const scene = new Scene(canvas, (nodeIx) => {
-  const n = lastSim?.nodes[nodeIx];
+  const n = lastSim?.queryResults[nodeIx];
   if (!n) return;
-  selectedKey = { beamIx: n.beamIx, offset_mm: n.offset_mm };
+  selectedKey = { beamIx: n.query.beamIx, offset_mm: n.query.offset_mm };
   // Auto-pick the biggest non-overflown δ-exag for this node so a click is
   // also a "show me this node clearly" gesture. Initial tip selection stays
   // at ×1 (this callback only fires on user picks, not on default-select).
-  const recommended = scene.recommendDisplayScale(n.delta_max_mm);
+  const recommended = scene.recommendDisplayScale(n.deflection.max().value);
   if (recommended !== currentScale) {
     currentScale = recommended;
     updateScaleButtons();
@@ -42,36 +42,50 @@ const scene = new Scene(canvas, (nodeIx) => {
   render();
 });
 
-function resolveSelectedNodeIx(sim: SimResult): number {
+function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
   if (selectedKey) {
-    const ix = sim.nodes.findIndex(
-      (n) => n.beamIx === selectedKey!.beamIx && n.offset_mm === selectedKey!.offset_mm,
+    const ix = sim.queryResults.findIndex(
+      (n) =>
+        n.query.beamIx === selectedKey!.beamIx && n.query.offset_mm === selectedKey!.offset_mm,
     );
     if (ix >= 0) return ix;
   }
-  return sim.tipNodeIx;
+  return tipQueryIx;
 }
 
 function render() {
   const { structure, diagnostics: pd } = parse(lastSrc);
   const sd = semcheck(structure);
   const { beams, diagnostics: wd } = walk(structure);
-  const sim = runSim(beams, structure);
-  lastSim = sim;
-  editor.setDiagnostics([...pd, ...sd, ...wd, ...sim.diagnostics]);
+  const ls = buildLoadSystem(structure, beams);
+  const out = simulate(ls.problem);
+  const baseDiags = [...pd, ...sd, ...wd, ...ls.diagnostics];
 
   const currentBeamIx = editorFocused
     ? findBeamAtOffset(structure.beams, cursorOffset)
     : null;
-  const selectedNodeIx = resolveSelectedNodeIx(sim);
+
+  if (out.kind === 'error') {
+    lastSim = null;
+    editor.setDiagnostics([...baseDiags, simErrorToDiagnostic(out, ls)]);
+    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1);
+    renderReadout(infoEl, null, ls.loadProvenance, -1, -1, lastSrc);
+    updateScaleButtons();
+    return;
+  }
+
+  lastSim = out;
+  editor.setDiagnostics(baseDiags);
+
+  const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
   scene.update(
     beams,
-    sim,
-    getSupportKind(structure),
+    out,
+    ls.supportKind,
     { currentBeamIx, focused: editorFocused },
     selectedNodeIx,
   );
-  renderReadout(infoEl, sim, selectedNodeIx, lastSrc);
+  renderReadout(infoEl, out, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc);
   updateScaleButtons();
 }
 

@@ -1,32 +1,41 @@
-import type { SimResult, SimLoad } from './sim/run';
+import type { LoadContribution, SimResult } from './sim/simulate';
+import type { LoadProvenance } from './loadsystem';
 
 // Renders the deflection breakdown into #info. Plain DOM, no framework.
 // Keep this file impl-agnostic about how SimResult was built: it only reads.
 // `src` is the DSL source — used to label explicit loads with their verbatim
 // `load(...)` text.
 
-export function renderReadout(el: HTMLElement, sim: SimResult, selectedNodeIx: number, src: string): void {
+export function renderReadout(
+  el: HTMLElement,
+  sim: SimResult | null,
+  loadProvenance: LoadProvenance[],
+  selectedNodeIx: number,
+  tipNodeIx: number,
+  src: string,
+): void {
   el.innerHTML = '';
 
-  if (sim.nodes.length === 0) {
+  if (!sim || sim.queryResults.length === 0) {
     el.innerHTML = '<span class="ro-empty">no chain</span>';
     return;
   }
 
-  const sel = sim.nodes[selectedNodeIx];
+  const sel = sim.queryResults[selectedNodeIx];
   if (!sel) return;
+  const deltaMax = sel.deflection.max().value;
 
   // Header: the δ value, then where it's measured.
   const headline = document.createElement('div');
   headline.className = 'ro-headline';
-  headline.textContent = `δ ≈ ${formatMm(sel.delta_max_mm)}`;
+  headline.textContent = `δ ≈ ${formatMm(deltaMax)}`;
   el.appendChild(headline);
 
   const subhead = document.createElement('div');
   subhead.className = 'ro-subhead';
-  subhead.textContent = selectedNodeIx === sim.tipNodeIx
-    ? `tip (beam${sel.beamIx})`
-    : `${nodeLoc(sel.offset_mm)} of beam${sel.beamIx}`;
+  subhead.textContent = selectedNodeIx === tipNodeIx
+    ? `tip (beam${sel.query.beamIx})`
+    : `${nodeLoc(sel.query.offset_mm)} of beam${sel.query.beamIx}`;
   el.appendChild(subhead);
 
   // Beams section — before loads: "which beam to stiffen" is the actionable
@@ -34,18 +43,21 @@ export function renderReadout(el: HTMLElement, sim: SimResult, selectedNodeIx: n
   if (sel.beams.length > 0) {
     el.appendChild(sectionHeader('beams'));
     for (const b of sel.beams) {
+      const bx = fractionOf(b.delta_mm_bendIx, deltaMax);
+      const by = fractionOf(b.delta_mm_bendIy, deltaMax);
+      const tor = fractionOf(b.delta_mm_torsion, deltaMax);
       const row = document.createElement('div');
       row.className = 'ro-row';
       const left = document.createElement('span');
-      left.append(modeChip('bx', b.bendIx_fraction));
-      left.append(modeChip('by', b.bendIy_fraction));
-      left.append(modeChip('tor', b.torsion_fraction));
+      left.append(modeChip('bx', bx));
+      left.append(modeChip('by', by));
+      left.append(modeChip('tor', tor));
       const lbl = document.createElement('span');
-      lbl.textContent = `beam${b.beamIx}  bx ${formatPct(b.bendIx_fraction)}  by ${formatPct(b.bendIy_fraction)}  tor ${formatPct(b.torsion_fraction)}`;
+      lbl.textContent = `beam${b.beamIx}  bx ${formatPct(bx)}  by ${formatPct(by)}  tor ${formatPct(tor)}`;
       left.appendChild(lbl);
       const right = document.createElement('span');
       right.className = 'frac';
-      right.textContent = formatPct(b.total_fraction);
+      right.textContent = formatPct(fractionOf(b.delta_mm, deltaMax));
       row.append(left, right);
       el.appendChild(row);
     }
@@ -56,17 +68,17 @@ export function renderReadout(el: HTMLElement, sim: SimResult, selectedNodeIx: n
     el.appendChild(sectionHeader('loads'));
     const grid = document.createElement('div');
     grid.className = 'ro-loads';
-    for (const f of sel.loads) {
-      const loc = loadLocEl(f, src);
+    for (const c of sel.loads) {
+      const loc = loadLocEl(c, loadProvenance[c.loadIx], src);
       const force = document.createElement('span');
       force.className = 'force';
-      force.textContent = formatLoad(f.Fmax_N);
+      force.textContent = formatLoad(c.load.Fmax_N);
       const delta = document.createElement('span');
       delta.className = 'delta';
-      delta.textContent = formatMm(f.delta_mm);
+      delta.textContent = formatMm(c.delta_mm);
       const frac = document.createElement('span');
       frac.className = 'frac';
-      frac.textContent = formatPct(f.fraction);
+      frac.textContent = formatPct(fractionOf(c.delta_mm, deltaMax));
       grid.append(loc, force, delta, frac);
     }
     el.appendChild(grid);
@@ -90,15 +102,15 @@ function nodeLoc(offset_mm: number): string {
 // Label element for a load: mass_accel body loads read "mass(<kg>)" so the
 // compute basis is visible; explicit loads show their verbatim `load(...)`
 // DSL text (whitespace-compacted). Both carry a distinct beam tag.
-function loadLocEl(f: SimLoad, src: string): HTMLElement {
+function loadLocEl(c: LoadContribution, prov: LoadProvenance | undefined, src: string): HTMLElement {
   const el = document.createElement('span');
-  const label = f.source === 'mass_accel'
-    ? `mass(${formatMass(f.mass_kg ?? 0)})`
-    : f.sourceSpan ? compact(src.slice(f.sourceSpan.start, f.sourceSpan.end)) : 'load';
+  const label = prov?.source === 'mass_accel'
+    ? `mass(${formatMass(prov.mass_kg ?? 0)})`
+    : prov?.sourceSpan ? compact(src.slice(prov.sourceSpan.start, prov.sourceSpan.end)) : 'load';
   el.append(`${label} `);
   const tag = document.createElement('span');
   tag.className = 'ro-beamtag';
-  tag.textContent = `beam${f.beamIx}`;
+  tag.textContent = `beam${c.load.beamIx}`;
   el.append(tag);
   return el;
 }
@@ -136,6 +148,11 @@ export function formatMm(v: number): string {
 
 function formatLoad(N: number): string {
   return `${N.toFixed(2)} N`;
+}
+
+// Display fraction of a signed contribution against the query's δ_max.
+function fractionOf(part: number, whole: number): number {
+  return whole > 1e-30 ? part / whole : 0;
 }
 
 function formatPct(frac: number): string {

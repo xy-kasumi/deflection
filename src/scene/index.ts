@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
-import type { SimResult } from '../sim/run';
+import type { SimResult } from '../sim/simulate';
 import { COLOR, VU, MOTION } from './tokens';
 import { Labels } from './labels';
 import { LobeRenderer, computeLobeCeilWorld } from './lobe';
@@ -108,7 +108,7 @@ export class Scene {
     const maxDim = Math.max(size.x, size.y, size.z);
     this.scaleHalf = Math.max(50, maxDim * 0.8 + Math.max(u * 6, 10));
 
-    if (sim && sim.nodes.length > 0) {
+    if (sim && sim.queryResults.length > 0) {
       const r = this.lobes.buildFor(sim, beams, {
         hitRadius, labelOffset, lobeFloor, selectedNodeIx, focused,
       });
