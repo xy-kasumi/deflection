@@ -50,6 +50,7 @@ const scene = new Scene(canvas, (nodeIx) => {
   const n = lastSim?.queryResults[nodeIx];
   if (!n) return;
   selectedKey = { beamIx: n.query.beamIx, offset_mm: n.query.offset_mm };
+  selectedDir = null;
   // Auto-pick the biggest non-overflown δ-exag for this node so a click is
   // also a "show me this node clearly" gesture. Initial tip selection stays
   // at ×1 (this callback only fires on user picks, not on default-select).
@@ -76,6 +77,7 @@ function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
 // Full pass: parse → simulate. Caches the result in `last`, then draws.
 function render() {
   hovered = null;
+  selectedDir = null;
   const { structure, diagnostics: pd } = parse(lastSrc);
   const sd = semcheck(structure);
   const { beams, diagnostics: wd } = walk(structure);
@@ -108,12 +110,13 @@ function redraw() {
   if (out.kind === 'error') {
     renderBreakdown(
       infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode, onHover, selectedDir,
+      onPickDir,
     );
   } else {
     const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
     renderBreakdown(
       infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode,
-      onHover, selectedDir,
+      onHover, selectedDir, onPickDir,
     );
   }
   updateScaleButtons();
@@ -146,6 +149,13 @@ function sameHover(a: HoverKey | null, b: HoverKey | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   return a.beamIx === b.beamIx && a.mode === b.mode;
+}
+
+// Direction picked on the Realistic-mode equirectangular picker — re-decompose
+// the breakdown at it.
+function onPickDir(d: Vec3) {
+  selectedDir = d;
+  redraw();
 }
 
 function findBeamAtOffset(defs: BeamDef[], offset: number): number | null {
@@ -186,6 +196,7 @@ modeToggleEl.addEventListener('click', (e) => {
   if (m === mode) return;
   mode = m;
   hovered = null;
+  selectedDir = null;
   updateModeButtons();
   redraw();
 });
@@ -215,5 +226,6 @@ render();
   get scale() { return currentScale; },
   get mode()  { return mode; },
   get hovered() { return hovered; },
+  get selectedDir() { return selectedDir; },
   get selectedKey() { return selectedKey; },
 };

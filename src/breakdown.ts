@@ -42,6 +42,7 @@ export function renderBreakdown(
   mode: DisplayMode,
   onHover: (h: HoverKey | null) => void,
   pickedDir: Vec3 | null,
+  onPickDir: (d: Vec3) => void,
 ): void {
   el.innerHTML = '';
 
@@ -56,6 +57,12 @@ export function renderBreakdown(
   const rows = mode === 'simple'
     ? simpleRows(sel)
     : realisticRows(sim, sel, selectedNodeIx, pickedDir);
+
+  // Realistic mode: the equirectangular picker selects the direction `rows`
+  // is decomposed in (above) — click to pick.
+  if (mode === 'realistic') {
+    el.appendChild(buildPicker(sel, pickedDir, onPickDir));
+  }
 
   // Header: the δ value, then where it's measured. Simple shows the
   // pessimistic bound it renders (δ ≲ …), Realistic the true worst case
@@ -144,6 +151,86 @@ export function renderBreakdown(
     }
     el.appendChild(grid);
   }
+}
+
+// ── equirectangular direction picker ───────────────────────────────────────
+// A δ(dir) heatmap over the full sphere: x = azimuth θ about world-up (+Y),
+// y = polar angle φ from +Y — so the canvas's vertical axis is world-up.
+// Clicking unprojects to a direction.
+const PICKER_W = 256;
+const PICKER_H = 128;
+
+function buildPicker(
+  sel: DeflectionQueryResult,
+  pickedDir: Vec3 | null,
+  onPickDir: (d: Vec3) => void,
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'bd-picker';
+  canvas.width = PICKER_W;
+  canvas.height = PICKER_H;
+  const ctx = canvas.getContext('2d')!;
+
+  const dmax = sel.deflection.max().value || 1;
+  const img = ctx.createImageData(PICKER_W, PICKER_H);
+  for (let py = 0; py < PICKER_H; py++) {
+    for (let px = 0; px < PICKER_W; px++) {
+      const t = sel.deflection.at(pickerUnproject(px + 0.5, py + 0.5)) / dmax;
+      const [r, g, b] = pickerRamp(t);
+      const o = (py * PICKER_W + px) * 4;
+      img.data[o] = r;
+      img.data[o + 1] = g;
+      img.data[o + 2] = b;
+      img.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // Marker at the current direction — the pick, or the auto d* when none.
+  const [mx, my] = pickerProject(pickedDir ?? sel.deflection.max().dir);
+  for (const [radius, color, width] of [[4, '#fff', 2], [4, '#000', 1]] as const) {
+    ctx.lineWidth = width;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.arc(mx, my, radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * PICKER_W;
+    const py = ((e.clientY - rect.top) / rect.height) * PICKER_H;
+    onPickDir(pickerUnproject(px, py));
+  });
+
+  return canvas;
+}
+
+// Canvas pixel → world direction. θ ∈ [0,2π) about +Y, φ ∈ [0,π] from +Y.
+function pickerUnproject(px: number, py: number): Vec3 {
+  const theta = (px / PICKER_W) * 2 * Math.PI;
+  const phi = (py / PICKER_H) * Math.PI;
+  const s = Math.sin(phi);
+  return [s * Math.cos(theta), Math.cos(phi), s * Math.sin(theta)];
+}
+
+// World direction → canvas pixel (inverse of pickerUnproject).
+function pickerProject(d: Vec3): [number, number] {
+  const phi = Math.acos(Math.max(-1, Math.min(1, d[1])));
+  let theta = Math.atan2(d[2], d[0]);
+  if (theta < 0) theta += 2 * Math.PI;
+  return [(theta / (2 * Math.PI)) * PICKER_W, (phi / Math.PI) * PICKER_H];
+}
+
+// δ heatmap ramp: panel-light at 0 → warm amber at the peak. Deflection's
+// domain colour is warm (the scene lobes too); red stays reserved for errors.
+function pickerRamp(t: number): [number, number, number] {
+  const c = Math.max(0, Math.min(1, t));
+  return [
+    Math.round(246 + (232 - 246) * c),
+    Math.round(247 + (148 - 247) * c),
+    Math.round(249 + (60 - 249) * c),
+  ];
 }
 
 interface BreakdownRows {

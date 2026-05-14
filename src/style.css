@@ -104,6 +104,16 @@ html, body {
   white-space: pre-wrap;
 }
 
+#info .bd-picker {
+  display: block;
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: crosshair;
+}
+
 #info .bd-headline {
   font-weight: 600;
   color: var(--text-fg);
