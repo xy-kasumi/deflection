@@ -1,7 +1,7 @@
 import type { Beam, DeflectionQuery, Load, Problem, Vec3 } from './problem';
 import { buildCompliances } from './compliance';
 import type { Compliances, Mat3, Mode } from './compliance';
-import { directionalFor, type Directional } from './directional';
+import { directionalFor, beamDirectionals, type Directional } from './directional';
 import { decompose } from './decompose';
 
 export type SimOutcome = SimResult | SimError;
@@ -33,6 +33,8 @@ export interface DeflectionQueryResult {
   pos_mm: Vec3;
   /** Full δ(dir) distribution. */
   deflection_mm: Directional;
+  /** Per-beam (and per-mode) δ in isolation; do not sum to deflection_mm. */
+  beamDeflections: BeamDeflection[];
   /** `deflection_mm.max()` broken down per contributing load. */
   loads: LoadContribution[];
   /** `deflection_mm.max()` broken down per contributing beam. */
@@ -56,6 +58,13 @@ export interface BeamContribution {
   delta_mm_bendIx: number;
   delta_mm_bendIy: number;
   delta_mm_torsionJ: number;
+}
+
+export interface BeamDeflection {
+  beamIx: number;
+  /** δ from this beam's compliance alone (worst-cased independently). */
+  deflection: Directional;
+  byMode: { mode: Mode; deflection: Directional }[];
 }
 
 export interface Force {
@@ -147,6 +156,7 @@ export function simulate(problem: Problem): SimOutcome {
       query,
       pos_mm: worldPos,
       deflection_mm: deflection,
+      beamDeflections: beamDirectionals(compliances, queryIx),
       loads,
       beams: beamContribs,
       forcesAt: (dir) => computeForces(compliances, queryIx, dir),

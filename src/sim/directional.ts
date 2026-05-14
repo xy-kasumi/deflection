@@ -1,5 +1,6 @@
-import type { Compliances, Mat3 } from './compliance';
+import type { Compliances, Mat3, Mode } from './compliance';
 import type { Vec3 } from './problem';
+import type { BeamDeflection } from './simulate';
 
 // Directional distribution at a query node q:
 //
@@ -56,7 +57,43 @@ export function directionalFor(c: Compliances, queryIx: number): Directional {
     if (t.queryIx !== queryIx) continue;
     ts.push({ N: transpose(t.C), F: c.loadFmax_N[t.loadIx] ?? 0 });
   }
+  return makeDirectional(ts);
+}
 
+/**
+ * δ restricted to each beam's compliance in isolation — each beam worst-cased
+ * independently. These do NOT sum to the whole-structure Directional
+ * (Σ ≥ δ, triangle inequality); each is honest only on its own.
+ */
+export function beamDirectionals(c: Compliances, queryIx: number): BeamDeflection[] {
+  const byBeam = new Map<number, {
+    total: Map<number, Mat3>;
+    perMode: Map<Mode, Map<number, Mat3>>;
+  }>();
+  for (const e of c.entries) {
+    if (e.queryIx !== queryIx) continue;
+    let b = byBeam.get(e.beamIx);
+    if (!b) { b = { total: new Map(), perMode: new Map() }; byBeam.set(e.beamIx, b); }
+    accumMat(b.total, e.loadIx, e.C);
+    let pm = b.perMode.get(e.mode);
+    if (!pm) { pm = new Map(); b.perMode.set(e.mode, pm); }
+    accumMat(pm, e.loadIx, e.C);
+  }
+
+  return [...byBeam.entries()]
+    .sort(([a], [z]) => a - z)
+    .map(([beamIx, b]) => ({
+      beamIx,
+      deflection: makeDirectional(termsOf(b.total, c)),
+      byMode: [...b.perMode.entries()].map(([mode, m]) => ({
+        mode,
+        deflection: makeDirectional(termsOf(m, c)),
+      })),
+    }));
+}
+
+// Build the δ(d) = Σ F·|N·d| evaluator over a fixed term list.
+function makeDirectional(ts: DeltaTerm[]): Directional {
   function at(dir: Vec3): number {
     const dn = normalizeOrZero(dir);
     if (dn === null) return 0;
@@ -153,4 +190,19 @@ function normalizeOrZero(v: Vec3): Vec3 | null {
   const m = Math.hypot(v[0], v[1], v[2]);
   if (m < 1e-30) return null;
   return [v[0] / m, v[1] / m, v[2] / m];
+}
+
+// Accumulate C into the per-load matrix bucket (creating a zero one if absent).
+function accumMat(m: Map<number, Mat3>, loadIx: number, C: Mat3): void {
+  let cur = m.get(loadIx);
+  if (!cur) { cur = [0, 0, 0, 0, 0, 0, 0, 0, 0]; m.set(loadIx, cur); }
+  for (let i = 0; i < 9; i++) (cur[i] as number) += C[i] as number;
+}
+
+function termsOf(byLoad: Map<number, Mat3>, c: Compliances): DeltaTerm[] {
+  const ts: DeltaTerm[] = [];
+  for (const [loadIx, C] of byLoad) {
+    ts.push({ N: transpose(C), F: c.loadFmax_N[loadIx] ?? 0 });
+  }
+  return ts;
 }
