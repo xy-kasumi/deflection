@@ -28,6 +28,17 @@ let selectedKey: { beamIx: number; offset_mm: number } | null = null;
 let lastSim: SimResult | null = null;
 let mode: DisplayMode = 'realistic';
 
+// Last full render's parse/sim outputs — redraw() draws from this without
+// re-parsing. render() refreshes it; redraw()/redrawScene() consume it.
+let last:
+  | {
+      beams: ReturnType<typeof walk>['beams'];
+      ls: ReturnType<typeof buildLoadSystem>;
+      out: ReturnType<typeof simulate>;
+      currentBeamIx: number | null;
+    }
+  | null = null;
+
 const scene = new Scene(canvas, (nodeIx) => {
   const n = lastSim?.queryResults[nodeIx];
   if (!n) return;
@@ -41,7 +52,7 @@ const scene = new Scene(canvas, (nodeIx) => {
     updateScaleButtons();
     scene.setDisplayScale(recommended);
   }
-  render();
+  redraw();
 });
 
 function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
@@ -55,6 +66,7 @@ function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
   return tipQueryIx;
 }
 
+// Full pass: parse → simulate. Caches the result in `last`, then draws.
 function render() {
   const { structure, diagnostics: pd } = parse(lastSrc);
   const sd = semcheck(structure);
@@ -70,26 +82,45 @@ function render() {
   if (out.kind === 'error') {
     lastSim = null;
     editor.setDiagnostics([...baseDiags, simErrorToDiagnostic(out, ls)]);
-    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1, mode);
-    renderBreakdown(infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode);
-    updateScaleButtons();
-    return;
+  } else {
+    lastSim = out;
+    editor.setDiagnostics(baseDiags);
   }
 
-  lastSim = out;
-  editor.setDiagnostics(baseDiags);
+  last = { beams, ls, out, currentBeamIx };
+  redraw();
+}
 
-  const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
-  scene.update(
-    beams,
-    out,
-    ls.supportKind,
-    { currentBeamIx, focused: editorFocused },
-    selectedNodeIx,
-    mode,
-  );
-  renderBreakdown(infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode);
+// Redraw scene + breakdown from the last render — no re-parse / re-simulate.
+// Used when only display state changed (selection, mode).
+function redraw() {
+  if (!last) return;
+  redrawScene();
+  const { ls, out } = last;
+  if (out.kind === 'error') {
+    renderBreakdown(infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode);
+  } else {
+    const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
+    renderBreakdown(
+      infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode,
+    );
+  }
   updateScaleButtons();
+}
+
+// Just the 3D scene. The hover path uses this — it leaves the breakdown pane
+// in place and only swaps the selected node's lobe.
+function redrawScene() {
+  if (!last) return;
+  const { beams, ls, out, currentBeamIx } = last;
+  if (out.kind === 'error') {
+    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1, mode);
+  } else {
+    const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
+    scene.update(
+      beams, out, ls.supportKind, { currentBeamIx, focused: editorFocused }, selectedNodeIx, mode,
+    );
+  }
 }
 
 function findBeamAtOffset(defs: BeamDef[], offset: number): number | null {
@@ -130,7 +161,7 @@ modeToggleEl.addEventListener('click', (e) => {
   if (m === mode) return;
   mode = m;
   updateModeButtons();
-  render();
+  redraw();
 });
 
 const editor = new Editor(
