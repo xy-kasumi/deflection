@@ -1,12 +1,12 @@
 import type { LoadContribution, SimResult } from './sim/simulate';
 import type { LoadProvenance } from './loadsystem';
 
-// Renders the deflection breakdown into #info. Plain DOM, no framework.
+// Renders the deflection breakdown pane into #info. Plain DOM, no framework.
 // Keep this file impl-agnostic about how SimResult was built: it only reads.
 // `src` is the DSL source — used to label explicit loads with their verbatim
 // `load(...)` text.
 
-export function renderReadout(
+export function renderBreakdown(
   el: HTMLElement,
   sim: SimResult | null,
   loadProvenance: LoadProvenance[],
@@ -17,7 +17,7 @@ export function renderReadout(
   el.innerHTML = '';
 
   if (!sim || sim.queryResults.length === 0) {
-    el.innerHTML = '<span class="ro-empty">no chain</span>';
+    el.innerHTML = '<span class="bd-empty">no chain</span>';
     return;
   }
 
@@ -27,12 +27,12 @@ export function renderReadout(
 
   // Header: the δ value, then where it's measured.
   const headline = document.createElement('div');
-  headline.className = 'ro-headline';
+  headline.className = 'bd-headline';
   headline.textContent = `δ ≈ ${formatMm(deltaMax)}`;
   el.appendChild(headline);
 
   const subhead = document.createElement('div');
-  subhead.className = 'ro-subhead';
+  subhead.className = 'bd-subhead';
   subhead.textContent = selectedNodeIx === tipNodeIx
     ? `tip (beam${sel.query.beamIx})`
     : `${nodeLoc(sel.query.offset_mm)} of beam${sel.query.beamIx}`;
@@ -47,7 +47,7 @@ export function renderReadout(
       const by = fractionOf(b.delta_mm_bendIy, deltaMax);
       const tor = fractionOf(b.delta_mm_torsion, deltaMax);
       const row = document.createElement('div');
-      row.className = 'ro-row';
+      row.className = 'bd-row';
       const left = document.createElement('span');
       left.append(modeChip('bx', bx));
       left.append(modeChip('by', by));
@@ -67,7 +67,7 @@ export function renderReadout(
   if (sel.loads.length > 0) {
     el.appendChild(sectionHeader('loads'));
     const grid = document.createElement('div');
-    grid.className = 'ro-loads';
+    grid.className = 'bd-loads';
     for (const c of sel.loads) {
       const loc = loadLocEl(c, loadProvenance[c.loadIx], src);
       const force = document.createElement('span');
@@ -87,7 +87,7 @@ export function renderReadout(
 
 function sectionHeader(text: string): HTMLElement {
   const hdr = document.createElement('div');
-  hdr.className = 'ro-section';
+  hdr.className = 'bd-section';
   hdr.textContent = text;
   return hdr;
 }
@@ -109,7 +109,7 @@ function loadLocEl(c: LoadContribution, prov: LoadProvenance | undefined, src: s
     : prov?.sourceSpan ? compact(src.slice(prov.sourceSpan.start, prov.sourceSpan.end)) : 'load';
   el.append(`${label} `);
   const tag = document.createElement('span');
-  tag.className = 'ro-beamtag';
+  tag.className = 'bd-beamtag';
   tag.textContent = `beam${c.load.beamIx}`;
   el.append(tag);
   return el;
@@ -127,7 +127,7 @@ function compact(s: string): string {
 
 function modeChip(cls: string, frac: number): HTMLElement {
   const bar = document.createElement('span');
-  bar.className = `ro-bar ${cls}`;
+  bar.className = `bd-bar ${cls}`;
   const width = Math.max(0, Math.min(1, Math.abs(frac))) * 24 + 2;
   bar.style.width = `${width}px`;
   return bar;

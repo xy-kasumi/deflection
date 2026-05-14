@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
 import { delta, type Directional, type DeltaTerm } from '../sim/directional';
-import { formatMm } from '../readout';
+import { formatMm } from '../breakdown';
 import { COLOR, MOTION, hexToVec3 } from './tokens';
 
 // Normal-lobe rendering. Filled mesh with per-vertex t = δ/δ_max. The fragment

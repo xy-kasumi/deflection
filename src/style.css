@@ -1,6 +1,6 @@
 /* Design tokens — single source of truth for the UI chrome's visual
    language. Mode-* hues intentionally share hex values with scene/tokens.ts
-   so the readout bars carry the same emotional register as the 3D scene
+   so the breakdown bars carry the same emotional register as the 3D scene
    (greys = structural, orange = load, green/blue = editor focus). */
 :root {
   --text-fg:    #1f2328;
@@ -15,7 +15,7 @@
   --overlay-bg-strong: rgba(255, 255, 255, 0.92);
   --overlay-shadow:    0 1px 3px rgba(0, 0, 0, 0.08);
 
-  /* Beam-mode swatches for the readout chips. Bend/torsion hues mirror
+  /* Beam-mode swatches for the breakdown chips. Bend/torsion hues mirror
      scene/tokens.ts COLOR.{walkerHintCurrent, beamCurrent, deformed}. */
   --mode-bend-x:  #2e7d32;
   --mode-bend-y:  #2563eb;
@@ -80,66 +80,66 @@ html, body {
   white-space: pre-wrap;
 }
 
-#info .ro-headline {
+#info .bd-headline {
   font-weight: 600;
   color: var(--text-fg);
 }
 
-#info .ro-subhead {
+#info .bd-subhead {
   margin-bottom: 6px;
   color: var(--text-muted);
 }
 
-#info .ro-section {
+#info .bd-section {
   margin-top: 8px;
   color: var(--text-muted);
 }
 
-#info .ro-row {
+#info .bd-row {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 6px;
   color: var(--text-fg);
 }
 
-#info .ro-loads {
+#info .bd-loads {
   display: grid;
   grid-template-columns: 1fr auto auto auto;
   column-gap: 12px;
   color: var(--text-fg);
 }
 
-#info .ro-loads .force,
-#info .ro-loads .delta {
+#info .bd-loads .force,
+#info .bd-loads .delta {
   color: var(--text-muted);
   text-align: right;
 }
 
-#info .ro-row .frac,
-#info .ro-loads .frac {
+#info .bd-row .frac,
+#info .bd-loads .frac {
   color: var(--text-muted);
   text-align: right;
 }
 
-#info .ro-beamtag {
+#info .bd-beamtag {
   color: var(--text-muted);
   background: var(--bg-hover);
   border-radius: var(--radius-sm);
   padding: 0 4px;
 }
 
-#info .ro-bar {
+#info .bd-bar {
   display: inline-block;
   height: 6px;
   border-radius: var(--radius-sm);
   margin-right: 6px;
   vertical-align: middle;
 }
-#info .ro-bar.bx  { background: var(--mode-bend-x); }
-#info .ro-bar.by  { background: var(--mode-bend-y); }
-#info .ro-bar.tor { background: var(--mode-torsion); }
+#info .bd-bar.bx  { background: var(--mode-bend-x); }
+#info .bd-bar.by  { background: var(--mode-bend-y); }
+#info .bd-bar.tor { background: var(--mode-torsion); }
 
-#info .ro-empty { color: var(--text-muted); font-style: italic; }
+#info .bd-empty { color: var(--text-muted); font-style: italic; }
 
 /* CodeMirror tuning */
 .cm-editor {

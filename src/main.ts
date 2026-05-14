@@ -5,7 +5,7 @@ import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
 import { buildLoadSystem, simErrorToDiagnostic } from './loadsystem';
 import { simulate, type SimResult } from './sim/simulate';
-import { renderReadout } from './readout';
+import { renderBreakdown } from './breakdown';
 
 const INITIAL_SRC = `support(single)
 mass_accel(2G)
@@ -69,7 +69,7 @@ function render() {
     lastSim = null;
     editor.setDiagnostics([...baseDiags, simErrorToDiagnostic(out, ls)]);
     scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1);
-    renderReadout(infoEl, null, ls.loadProvenance, -1, -1, lastSrc);
+    renderBreakdown(infoEl, null, ls.loadProvenance, -1, -1, lastSrc);
     updateScaleButtons();
     return;
   }
@@ -85,7 +85,7 @@ function render() {
     { currentBeamIx, focused: editorFocused },
     selectedNodeIx,
   );
-  renderReadout(infoEl, out, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc);
+  renderBreakdown(infoEl, out, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc);
   updateScaleButtons();
 }
 
