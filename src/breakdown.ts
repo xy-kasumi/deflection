@@ -1,4 +1,6 @@
-import type { LoadContribution, SimResult } from './sim/simulate';
+import type { SimResult } from './sim/simulate';
+import type { Load, Vec3 } from './sim/problem';
+import type { Mode } from './sim/compliance';
 import type { LoadProvenance } from './loadsystem';
 
 // Renders the deflection breakdown pane into #info. Plain DOM, no framework.
@@ -9,6 +11,7 @@ import type { LoadProvenance } from './loadsystem';
 export function renderBreakdown(
   el: HTMLElement,
   sim: SimResult | null,
+  loads: Load[],
   loadProvenance: LoadProvenance[],
   selectedNodeIx: number,
   tipNodeIx: number,
@@ -23,7 +26,12 @@ export function renderBreakdown(
 
   const sel = sim.queryResults[selectedNodeIx];
   if (!sel) return;
-  const deltaMax = sel.deflection.max().value;
+  const { dir, value: deltaMax } = sel.deflection.max();
+
+  // The breakdown is the deflection resolved in the worst-case direction d*:
+  // apply that direction's worst-case forces, then read off the determined,
+  // exactly-additive per-beam / per-load contributions (projected onto d*).
+  const dd = sim.under(sel.forcesAt(dir)).queryResults[selectedNodeIx];
 
   // Header: the δ value, then where it's measured.
   const headline = document.createElement('div');
@@ -42,7 +50,7 @@ export function renderBreakdown(
   // question. Per-mode fractions can be negative (a mode that opposes d*).
   // The two bend modes carry an arrow glyph for the two orthogonal bending
   // planes; torsion is the plain word "twist" — it has no chirality to point.
-  if (sel.beams.length > 0) {
+  if (dd && dd.perBeam.length > 0) {
     el.appendChild(sectionHeader('beams'));
     const grid = document.createElement('div');
     grid.className = 'bd-beams';
@@ -52,41 +60,58 @@ export function renderBreakdown(
       h.textContent = text;
       grid.append(h);
     }
-    for (const b of sel.beams) {
+    for (const b of dd.perBeam) {
       const name = document.createElement('span');
       name.textContent = `beam${b.beamIx}`;
       grid.append(
         name,
-        fracCell(fractionOf(b.delta_mm_bendIx, deltaMax)),
-        fracCell(fractionOf(b.delta_mm_bendIy, deltaMax)),
-        fracCell(fractionOf(b.delta_mm_torsionJ, deltaMax)),
-        fracCell(fractionOf(b.delta_mm, deltaMax), true),
+        fracCell(fractionOf(modeAlong(b.byMode, 'bendIx', dir), deltaMax)),
+        fracCell(fractionOf(modeAlong(b.byMode, 'bendIy', dir), deltaMax)),
+        fracCell(fractionOf(modeAlong(b.byMode, 'torsionJ', dir), deltaMax)),
+        fracCell(fractionOf(dot(dir, b.vector_mm), deltaMax), true),
       );
     }
     el.appendChild(grid);
   }
 
   // Loads section. One shared grid so columns align across rows.
-  if (sel.loads.length > 0) {
+  if (dd && dd.perLoad.length > 0) {
     el.appendChild(sectionHeader('loads'));
     const grid = document.createElement('div');
     grid.className = 'bd-loads';
-    const loads = [...sel.loads].sort((a, b) => b.delta_mm - a.delta_mm);
-    for (const c of loads) {
-      const loc = loadLocEl(c, loadProvenance[c.loadIx], src);
+    const rows = dd.perLoad
+      .map((pl) => ({ loadIx: pl.loadIx, delta_mm: dot(dir, pl.vector_mm) }))
+      .sort((a, b) => b.delta_mm - a.delta_mm);
+    for (const r of rows) {
+      const load = loads[r.loadIx];
+      const loc = loadLocEl(load, loadProvenance[r.loadIx], src);
       const force = document.createElement('span');
       force.className = 'force';
-      force.textContent = formatLoad(c.load.Fmax_N);
+      force.textContent = formatLoad(load?.Fmax_N ?? 0);
       const delta = document.createElement('span');
       delta.className = 'delta';
-      delta.textContent = formatMm(c.delta_mm);
+      delta.textContent = formatMm(r.delta_mm);
       const frac = document.createElement('span');
       frac.className = 'frac';
-      frac.textContent = formatPct(fractionOf(c.delta_mm, deltaMax));
+      frac.textContent = formatPct(fractionOf(r.delta_mm, deltaMax));
       grid.append(loc, force, delta, frac);
     }
     el.appendChild(grid);
   }
+}
+
+// Signed contribution of one mode along `dir` — 0 if the beam doesn't excite it.
+function modeAlong(
+  byMode: { mode: Mode; vector_mm: Vec3 }[],
+  mode: Mode,
+  dir: Vec3,
+): number {
+  const m = byMode.find((x) => x.mode === mode);
+  return m ? dot(dir, m.vector_mm) : 0;
+}
+
+function dot(a: Vec3, b: Vec3): number {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
 function sectionHeader(text: string): HTMLElement {
@@ -106,7 +131,7 @@ function nodeLoc(offset_mm: number): string {
 // Label element for a load: mass_accel body loads read "mass(<kg>)" so the
 // compute basis is visible; explicit loads show their verbatim `load(...)`
 // DSL text (whitespace-compacted). Both carry a distinct beam tag.
-function loadLocEl(c: LoadContribution, prov: LoadProvenance | undefined, src: string): HTMLElement {
+function loadLocEl(load: Load | undefined, prov: LoadProvenance | undefined, src: string): HTMLElement {
   const el = document.createElement('span');
   const label = prov?.source === 'mass_accel'
     ? `mass(${formatMass(prov.mass_kg ?? 0)})`
@@ -114,7 +139,7 @@ function loadLocEl(c: LoadContribution, prov: LoadProvenance | undefined, src: s
   el.append(`${label} `);
   const tag = document.createElement('span');
   tag.className = 'bd-beamtag';
-  tag.textContent = `beam${c.load.beamIx}`;
+  tag.textContent = `beam${load?.beamIx ?? '?'}`;
   el.append(tag);
   return el;
 }

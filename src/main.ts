@@ -69,7 +69,7 @@ function render() {
     lastSim = null;
     editor.setDiagnostics([...baseDiags, simErrorToDiagnostic(out, ls)]);
     scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1);
-    renderBreakdown(infoEl, null, ls.loadProvenance, -1, -1, lastSrc);
+    renderBreakdown(infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc);
     updateScaleButtons();
     return;
   }
@@ -85,7 +85,7 @@ function render() {
     { currentBeamIx, focused: editorFocused },
     selectedNodeIx,
   );
-  renderBreakdown(infoEl, out, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc);
+  renderBreakdown(infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc);
   updateScaleButtons();
 }
 
