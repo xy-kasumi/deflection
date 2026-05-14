@@ -14,6 +14,18 @@ export function displayDirectional(n: DeflectionQueryResult, mode: DisplayMode):
   return sumDirectionals(n.beamDeflections.flatMap((b) => b.byMode.map((m) => m.deflection)));
 }
 
+/** A hovered breakdown component: a beam (mode null) or one of its modes. */
+export type HoverKey = { beamIx: number; mode: Mode | null };
+
+// The isolated Directional for a hovered component, or null if it can't be
+// resolved (e.g. the beam has no entry for that mode).
+export function hoverDirectional(n: DeflectionQueryResult, h: HoverKey): Directional | null {
+  const bd = n.beamDeflections.find((b) => b.beamIx === h.beamIx);
+  if (!bd) return null;
+  if (h.mode === null) return bd.deflection;
+  return bd.byMode.find((m) => m.mode === h.mode)?.deflection ?? null;
+}
+
 // Renders the deflection breakdown pane into #info. Plain DOM, no framework.
 // Keep this file impl-agnostic about how SimResult was built: it only reads.
 // `src` is the DSL source — used to label explicit loads with their verbatim
@@ -28,6 +40,7 @@ export function renderBreakdown(
   tipNodeIx: number,
   src: string,
   mode: DisplayMode,
+  onHover: (h: HoverKey | null) => void,
 ): void {
   el.innerHTML = '';
 
@@ -76,13 +89,34 @@ export function renderBreakdown(
     for (const b of rows.perBeam) {
       const name = document.createElement('span');
       name.textContent = `beam${b.beamIx}`;
-      grid.append(
+      const cells = [
         name,
         fracCell(fractionOf(b.bendIx, rows.deltaMax)),
         fracCell(fractionOf(b.bendIy, rows.deltaMax)),
         fracCell(fractionOf(b.torsionJ, rows.deltaMax)),
         fracCell(fractionOf(b.total, rows.deltaMax), true),
-      );
+      ];
+      // Simple mode: each cell is a hover target. Name and total cells stand
+      // for the whole beam (mode unset); the three frac cells for one mode.
+      if (mode === 'simple') {
+        const cellModes: (Mode | null)[] = [null, 'bendIx', 'bendIy', 'torsionJ', null];
+        cells.forEach((cell, i) => {
+          cell.classList.add('bd-hover');
+          cell.dataset['beam'] = String(b.beamIx);
+          const m = cellModes[i];
+          if (m) cell.dataset['mode'] = m;
+        });
+      }
+      grid.append(...cells);
+    }
+    if (mode === 'simple') {
+      grid.addEventListener('pointermove', (e) => {
+        const cell = (e.target as HTMLElement).closest('[data-beam]') as HTMLElement | null;
+        if (!cell) { onHover(null); return; }
+        const m = cell.dataset['mode'] as Mode | undefined;
+        onHover({ beamIx: Number(cell.dataset['beam']), mode: m ?? null });
+      });
+      grid.addEventListener('pointerleave', () => onHover(null));
     }
     el.appendChild(grid);
   }

@@ -5,7 +5,7 @@ import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
 import { buildLoadSystem, simErrorToDiagnostic } from './loadsystem';
 import { simulate, type SimResult } from './sim/simulate';
-import { renderBreakdown, type DisplayMode } from './breakdown';
+import { renderBreakdown, type DisplayMode, type HoverKey } from './breakdown';
 
 const INITIAL_SRC = `support(single)
 mass_accel(2G)
@@ -27,6 +27,9 @@ let editorFocused = false;
 let selectedKey: { beamIx: number; offset_mm: number } | null = null;
 let lastSim: SimResult | null = null;
 let mode: DisplayMode = 'realistic';
+// Hovered breakdown component (Simple mode only) — swaps the selected node's
+// lobe to that component's isolated δ.
+let hovered: HoverKey | null = null;
 
 // Last full render's parse/sim outputs — redraw() draws from this without
 // re-parsing. render() refreshes it; redraw()/redrawScene() consume it.
@@ -68,6 +71,7 @@ function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
 
 // Full pass: parse → simulate. Caches the result in `last`, then draws.
 function render() {
+  hovered = null;
   const { structure, diagnostics: pd } = parse(lastSrc);
   const sd = semcheck(structure);
   const { beams, diagnostics: wd } = walk(structure);
@@ -98,11 +102,11 @@ function redraw() {
   redrawScene();
   const { ls, out } = last;
   if (out.kind === 'error') {
-    renderBreakdown(infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode);
+    renderBreakdown(infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode, onHover);
   } else {
     const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
     renderBreakdown(
-      infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode,
+      infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode, onHover,
     );
   }
   updateScaleButtons();
@@ -114,13 +118,27 @@ function redrawScene() {
   if (!last) return;
   const { beams, ls, out, currentBeamIx } = last;
   if (out.kind === 'error') {
-    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1, mode);
+    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1, mode, null);
   } else {
     const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
     scene.update(
-      beams, out, ls.supportKind, { currentBeamIx, focused: editorFocused }, selectedNodeIx, mode,
+      beams, out, ls.supportKind, { currentBeamIx, focused: editorFocused }, selectedNodeIx, mode, hovered,
     );
   }
+}
+
+// Hover handler passed to renderBreakdown. Dedups (pointermove fires often),
+// then refreshes only the scene — the breakdown pane stays put.
+function onHover(h: HoverKey | null) {
+  if (sameHover(h, hovered)) return;
+  hovered = h;
+  redrawScene();
+}
+
+function sameHover(a: HoverKey | null, b: HoverKey | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.beamIx === b.beamIx && a.mode === b.mode;
 }
 
 function findBeamAtOffset(defs: BeamDef[], offset: number): number | null {
@@ -160,6 +178,7 @@ modeToggleEl.addEventListener('click', (e) => {
   const m = btn.dataset['mode'] as DisplayMode;
   if (m === mode) return;
   mode = m;
+  hovered = null;
   updateModeButtons();
   redraw();
 });
@@ -188,5 +207,6 @@ render();
   get sim()   { return lastSim; },
   get scale() { return currentScale; },
   get mode()  { return mode; },
+  get hovered() { return hovered; },
   get selectedKey() { return selectedKey; },
 };

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
-import type { DisplayMode } from '../breakdown';
+import type { DisplayMode, HoverKey } from '../breakdown';
 import { COLOR, VU, MOTION } from './tokens';
 import { Labels } from './labels';
 import { LobeRenderer, computeLobeCeilWorld } from './lobe';
@@ -72,6 +72,7 @@ export class Scene {
     editor: { currentBeamIx: number | null; focused: boolean } | undefined,
     selectedNodeIx: number,
     mode: DisplayMode,
+    hovered: HoverKey | null,
   ): void {
     disposeChildren(this.content);
     this.pickables = [];
@@ -112,7 +113,7 @@ export class Scene {
 
     if (sim && sim.queryResults.length > 0) {
       const r = this.lobes.buildFor(sim, beams, {
-        hitRadius, labelOffset, lobeFloor, selectedNodeIx, focused, mode,
+        hitRadius, labelOffset, lobeFloor, selectedNodeIx, focused, mode, hovered,
       });
       for (const m of r.meshes) this.content.add(m);
       this.pickables.push(...r.pickables);

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
 import { delta, type Directional, type DeltaTerm } from '../sim/directional';
-import { formatMm, displayDirectional, type DisplayMode } from '../breakdown';
+import { formatMm, displayDirectional, hoverDirectional, type DisplayMode, type HoverKey } from '../breakdown';
 import { COLOR, MOTION, hexToVec3 } from './tokens';
 
 // Normal-lobe rendering. Filled mesh with per-vertex t = δ/δ_max. The fragment
@@ -174,6 +174,7 @@ export interface LobeBuildOpts {
   selectedNodeIx: number;
   focused: boolean;
   mode: DisplayMode;
+  hovered: HoverKey | null;
 }
 
 export interface LobeLabelSpec {
@@ -239,9 +240,14 @@ export class LobeRenderer {
 
     for (let ix = 0; ix < sim.queryResults.length; ix++) {
       const n = sim.queryResults[ix]!;
-      const lobeDir = displayDirectional(n, opts.mode);
-      const delta_max_mm = lobeDir.max().value;
       const isSel = ix === opts.selectedNodeIx;
+      // The hovered breakdown component (Simple mode) replaces the selected
+      // node's lobe with that component's isolated δ.
+      let lobeDir = displayDirectional(n, opts.mode);
+      if (opts.mode === 'simple' && opts.hovered && isSel) {
+        lobeDir = hoverDirectional(n, opts.hovered) ?? lobeDir;
+      }
+      const delta_max_mm = lobeDir.max().value;
       const worldPos = new THREE.Vector3(...n.pos_mm);
 
       // All three states are built up-front. The per-frame tick scales/fades

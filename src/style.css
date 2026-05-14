@@ -166,6 +166,15 @@ html, body {
   padding: 0 4px;
 }
 
+/* Simple-mode breakdown cells double as lobe-preview hover targets. */
+#info .bd-beams .bd-hover {
+  user-select: none;
+}
+
+#info .bd-beams .bd-hover:hover {
+  background: var(--bg-hover);
+}
+
 #info .bd-empty { color: var(--text-muted); font-style: italic; }
 
 /* CodeMirror tuning */
