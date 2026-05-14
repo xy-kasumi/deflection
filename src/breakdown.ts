@@ -38,20 +38,17 @@ export function renderBreakdown(
 
   const sel = sim.queryResults[selectedNodeIx];
   if (!sel) return;
-  const { dir, value: deltaMax } = sel.deflection.max();
 
-  // The breakdown is the deflection resolved in the worst-case direction d*:
-  // apply that direction's worst-case forces, then read off the determined,
-  // exactly-additive per-beam / per-load contributions (projected onto d*).
-  const dd = sim.under(sel.forcesAt(dir)).queryResults[selectedNodeIx];
+  const rows = mode === 'simple'
+    ? simpleRows(sel)
+    : realisticRows(sim, sel, selectedNodeIx);
 
-  // Header: the δ value, then where it's measured. Simple mode shows the
-  // pessimistic bound it renders (δ ≲ …); the beams/loads below stay the
-  // exact d* decomposition regardless of mode.
+  // Header: the δ value, then where it's measured. Simple shows the
+  // pessimistic bound it renders (δ ≲ …), Realistic the true worst case
+  // (δ ≈ …); either way the beams/loads below sum to it.
   const headline = document.createElement('div');
   headline.className = 'bd-headline';
-  const headlineDelta = mode === 'simple' ? displayDirectional(sel, mode).max().value : deltaMax;
-  headline.textContent = `δ ${mode === 'simple' ? '≲' : '≈'} ${formatMm(headlineDelta)}`;
+  headline.textContent = `δ ${rows.glyph} ${formatMm(rows.deltaMax)}`;
   el.appendChild(headline);
 
   const subhead = document.createElement('div');
@@ -62,10 +59,11 @@ export function renderBreakdown(
   el.appendChild(subhead);
 
   // Beams section — before loads: "which beam to stiffen" is the actionable
-  // question. Per-mode fractions can be negative (a mode that opposes d*).
-  // The two bend modes carry an arrow glyph for the two orthogonal bending
-  // planes; torsion is the plain word "twist" — it has no chirality to point.
-  if (dd && dd.perBeam.length > 0) {
+  // question. Realistic per-mode values can be negative (a mode that opposes
+  // d*); Simple values are non-negative. The two bend modes carry an arrow
+  // glyph for the two orthogonal bending planes; torsion is the plain word
+  // "twist" — it has no chirality to point.
+  if (rows.perBeam.length > 0) {
     el.appendChild(sectionHeader('beams'));
     const grid = document.createElement('div');
     grid.className = 'bd-beams';
@@ -75,29 +73,27 @@ export function renderBreakdown(
       h.textContent = text;
       grid.append(h);
     }
-    for (const b of dd.perBeam) {
+    for (const b of rows.perBeam) {
       const name = document.createElement('span');
       name.textContent = `beam${b.beamIx}`;
       grid.append(
         name,
-        fracCell(fractionOf(modeAlong(b.byMode, 'bendIx', dir), deltaMax)),
-        fracCell(fractionOf(modeAlong(b.byMode, 'bendIy', dir), deltaMax)),
-        fracCell(fractionOf(modeAlong(b.byMode, 'torsionJ', dir), deltaMax)),
-        fracCell(fractionOf(dot(dir, b.vector_mm), deltaMax), true),
+        fracCell(fractionOf(b.bendIx, rows.deltaMax)),
+        fracCell(fractionOf(b.bendIy, rows.deltaMax)),
+        fracCell(fractionOf(b.torsionJ, rows.deltaMax)),
+        fracCell(fractionOf(b.total, rows.deltaMax), true),
       );
     }
     el.appendChild(grid);
   }
 
   // Loads section. One shared grid so columns align across rows.
-  if (dd && dd.perLoad.length > 0) {
+  if (rows.perLoad.length > 0) {
     el.appendChild(sectionHeader('loads'));
     const grid = document.createElement('div');
     grid.className = 'bd-loads';
-    const rows = dd.perLoad
-      .map((pl) => ({ loadIx: pl.loadIx, delta_mm: dot(dir, pl.vector_mm) }))
-      .sort((a, b) => b.delta_mm - a.delta_mm);
-    for (const r of rows) {
+    const loadRows = [...rows.perLoad].sort((a, b) => b.delta_mm - a.delta_mm);
+    for (const r of loadRows) {
       const load = loads[r.loadIx];
       const loc = loadLocEl(load, loadProvenance[r.loadIx], src);
       const force = document.createElement('span');
@@ -108,11 +104,61 @@ export function renderBreakdown(
       delta.textContent = formatMm(r.delta_mm);
       const frac = document.createElement('span');
       frac.className = 'frac';
-      frac.textContent = formatPct(fractionOf(r.delta_mm, deltaMax));
+      frac.textContent = formatPct(fractionOf(r.delta_mm, rows.deltaMax));
       grid.append(loc, force, delta, frac);
     }
     el.appendChild(grid);
   }
+}
+
+interface BreakdownRows {
+  /** Headline δ; every contribution below is a fraction of this. */
+  deltaMax: number;
+  /** Header glyph: ≈ for the true value, ≲ for the pessimistic bound. */
+  glyph: string;
+  perBeam: { beamIx: number; bendIx: number; bendIy: number; torsionJ: number; total: number }[];
+  perLoad: { loadIx: number; delta_mm: number }[];
+}
+
+// Realistic: the exact deflection resolved in the true worst-case direction
+// d*. Apply d*'s worst-case forces and read the determined contributions
+// projected onto d* — signed, summing exactly to δ(d*).
+function realisticRows(sim: SimResult, sel: DeflectionQueryResult, selIx: number): BreakdownRows {
+  const { dir, value: deltaMax } = sel.deflection.max();
+  const dd = sim.under(sel.forcesAt(dir)).queryResults[selIx];
+  if (!dd) return { deltaMax, glyph: '≈', perBeam: [], perLoad: [] };
+  return {
+    deltaMax,
+    glyph: '≈',
+    perBeam: dd.perBeam.map((b) => ({
+      beamIx: b.beamIx,
+      bendIx: modeAlong(b.byMode, 'bendIx', dir),
+      bendIy: modeAlong(b.byMode, 'bendIy', dir),
+      torsionJ: modeAlong(b.byMode, 'torsionJ', dir),
+      total: dot(dir, b.vector_mm),
+    })),
+    perLoad: dd.perLoad.map((pl) => ({ loadIx: pl.loadIx, delta_mm: dot(dir, pl.vector_mm) })),
+  };
+}
+
+// Simple: the pessimistic sum decomposed at its own argmax d_simple*. Every
+// part (per beam, per mode, per load) is evaluated at that one direction, so —
+// the sum being pointwise-exact — the parts sum exactly to the δ ≲ headline.
+// All non-negative: each isolated δ is a sum of F·|N·d|.
+function simpleRows(sel: DeflectionQueryResult): BreakdownRows {
+  const { dir: d, value: deltaMax } = displayDirectional(sel, 'simple').max();
+  return {
+    deltaMax,
+    glyph: '≲',
+    perBeam: sel.beamDeflections.map((b) => {
+      const at = (m: Mode) => b.byMode.find((x) => x.mode === m)?.deflection.at(d) ?? 0;
+      const bendIx = at('bendIx');
+      const bendIy = at('bendIy');
+      const torsionJ = at('torsionJ');
+      return { beamIx: b.beamIx, bendIx, bendIy, torsionJ, total: bendIx + bendIy + torsionJ };
+    }),
+    perLoad: sel.loadDeflections.map((l) => ({ loadIx: l.loadIx, delta_mm: l.deflection.at(d) })),
+  };
 }
 
 // Signed contribution of one mode along `dir` — 0 if the beam doesn't excite it.
