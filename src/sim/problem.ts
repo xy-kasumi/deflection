@@ -34,6 +34,7 @@ export interface Material {
   G_MPa: number;
 }
 
+/** Spans `frame.origin_mm` → `frame.origin_mm + length_mm · frame.axial`. */
 export interface Beam {
   frame: Frame;
   length_mm: number;

@@ -5,16 +5,17 @@ import type { Attachment, BeamDef, LocSpec, Structure } from './dsl/parse';
 // Walker forward kinematics over the serial beam chain.
 //
 // World is right-handed with Y up (matches three.js default).
-// Frame convention per beam: right-handed with F × R = U.
+// Frame convention per beam: the ordered triad (F, L, U) is right-handed,
+// F × L = U.
 // Root is gravity-anchored:
-//   horz → F=+X, R=-Z, U=+Y
-//   up   → F=+Y, R=-Z, U=-X   (pitch-up from horz)
-//   down → F=-Y, R=-Z, U=+X   (pitch-down from horz)
+//   horz → F=+X, L=-Z, U=+Y
+//   up   → F=+Y, L=-Z, U=-X   (pitch-up from horz)
+//   down → F=-Y, L=-Z, U=+X   (pitch-down from horz)
 // Non-root: take parent's frame at the attachment offset, then turn:
-//   right → F=-R, R=F, U=U     (yaw — walker turns to their right)
-//   left  → F=R, R=-F, U=U
-//   up    → F=U, U=-F, R=R     (pitch)
-//   down  → F=-U, U=F, R=R
+//   right → F=-L, L=F, U=U     (yaw — walker turns to their right)
+//   left  → F=L, L=-F, U=U
+//   up    → F=U, U=-F, L=L     (pitch)
+//   down  → F=-U, U=F, L=L
 //   horz  → no-op (warned upstream)
 
 export type Vec3 = [number, number, number];
@@ -22,7 +23,7 @@ export type Vec3 = [number, number, number];
 export interface Frame {
   origin: Vec3;
   fwd: Vec3;
-  right: Vec3;
+  left: Vec3;
   up: Vec3;
 }
 
@@ -80,11 +81,11 @@ function rootFrame(dir: Dir): Frame {
   const origin: Vec3 = [0, 0, 0];
   switch (dir) {
     case 'up':
-      return { origin, fwd: [0, 1, 0], right: [0, 0, -1], up: [-1, 0, 0] };
+      return { origin, fwd: [0, 1, 0], left: [0, 0, -1], up: [-1, 0, 0] };
     case 'down':
-      return { origin, fwd: [0, -1, 0], right: [0, 0, -1], up: [1, 0, 0] };
+      return { origin, fwd: [0, -1, 0], left: [0, 0, -1], up: [1, 0, 0] };
     default: // horz, and left/right on root fall through to horz
-      return { origin, fwd: [1, 0, 0], right: [0, 0, -1], up: [0, 1, 0] };
+      return { origin, fwd: [1, 0, 0], left: [0, 0, -1], up: [0, 1, 0] };
   }
 }
 
@@ -92,22 +93,22 @@ function advanceAlongFwd(f: Frame, mm: number): Frame {
   return {
     origin: addV(f.origin, scaleV(f.fwd, mm)),
     fwd: f.fwd,
-    right: f.right,
+    left: f.left,
     up: f.up,
   };
 }
 
 function applyTurn(base: Frame, dir: Dir): Frame {
-  const { origin, fwd: F, right: R, up: U } = base;
+  const { origin, fwd: F, left: L, up: U } = base;
   switch (dir) {
     case 'right':
-      return { origin, fwd: negV(R), right: F, up: U };
+      return { origin, fwd: negV(L), left: F, up: U };
     case 'left':
-      return { origin, fwd: R, right: negV(F), up: U };
+      return { origin, fwd: L, left: negV(F), up: U };
     case 'up':
-      return { origin, fwd: U, right: R, up: negV(F) };
+      return { origin, fwd: U, left: L, up: negV(F) };
     case 'down':
-      return { origin, fwd: negV(U), right: R, up: F };
+      return { origin, fwd: negV(U), left: L, up: F };
     case 'horz':
       // ambiguous on non-root — fall through with no turn so the user can see
       // the rest of the chain (semcheck has already flagged it).
