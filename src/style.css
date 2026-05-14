@@ -104,11 +104,16 @@ html, body {
   white-space: pre-wrap;
 }
 
-#info .bd-picker {
+#picker-host {
+  padding: 10px 12px 0;
+  background: var(--bg-app);
+  border-top: 1px solid var(--border);
+}
+
+.bd-picker {
   display: block;
   width: 100%;
   aspect-ratio: 2 / 1;
-  margin-bottom: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   cursor: crosshair;

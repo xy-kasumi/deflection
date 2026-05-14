@@ -7,6 +7,7 @@ import { buildLoadSystem, simErrorToDiagnostic } from './loadsystem';
 import { simulate, type SimResult } from './sim/simulate';
 import type { Vec3 } from './sim/problem';
 import { renderBreakdown, type DisplayMode, type HoverKey } from './breakdown';
+import { DirPicker } from './picker';
 
 const INITIAL_SRC = `support(single)
 mass_accel(2G)
@@ -20,6 +21,7 @@ const infoEl = document.getElementById('info') as HTMLElement;
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const scaleOverlayEl = document.getElementById('scale-overlay') as HTMLElement;
 const modeToggleEl = document.getElementById('mode-toggle') as HTMLElement;
+const pickerHostEl = document.getElementById('picker-host') as HTMLElement;
 
 let currentScale = 1;
 let lastSrc = INITIAL_SRC;
@@ -62,6 +64,10 @@ const scene = new Scene(canvas, (nodeIx) => {
   }
   redraw();
 });
+
+const picker = new DirPicker();
+pickerHostEl.appendChild(picker.el);
+picker.onPick = onPickDir;
 
 function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
   if (selectedKey) {
@@ -108,15 +114,23 @@ function redraw() {
   redrawScene();
   const { ls, out } = last;
   if (out.kind === 'error') {
+    pickerHostEl.style.display = 'none';
     renderBreakdown(
       infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode, onHover, selectedDir,
-      onPickDir,
     );
   } else {
     const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
+    const sel = out.queryResults[selectedNodeIx];
+    if (mode === 'realistic' && sel) {
+      pickerHostEl.style.display = '';
+      picker.setData(sel.deflection);
+      picker.setPick(selectedDir);
+    } else {
+      pickerHostEl.style.display = 'none';
+    }
     renderBreakdown(
       infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode,
-      onHover, selectedDir, onPickDir,
+      onHover, selectedDir,
     );
   }
   updateScaleButtons();
