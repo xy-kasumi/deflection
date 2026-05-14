@@ -68,7 +68,8 @@ export function renderBreakdown(
     el.appendChild(sectionHeader('loads'));
     const grid = document.createElement('div');
     grid.className = 'bd-loads';
-    for (const c of sel.loads) {
+    const loads = [...sel.loads].sort((a, b) => b.delta_mm - a.delta_mm);
+    for (const c of loads) {
       const loc = loadLocEl(c, loadProvenance[c.loadIx], src);
       const force = document.createElement('span');
       force.className = 'force';
@@ -115,8 +116,16 @@ function loadLocEl(c: LoadContribution, prov: LoadProvenance | undefined, src: s
   return el;
 }
 
+// Mass label: 2 significant figures, kg as the home unit. Drop to grams below
+// 0.1 kg, where kg would otherwise force leading-zero noise like "0.04".
 function formatMass(kg: number): string {
-  return `${kg.toPrecision(3)}kg`;
+  return kg < 0.1 ? `${sig2(kg * 1000)}g` : `${sig2(kg)}kg`;
+}
+
+function sig2(v: number): string {
+  if (v === 0) return '0';
+  const exp = Math.floor(Math.log10(Math.abs(v)));
+  return v.toFixed(Math.max(0, 1 - exp));
 }
 
 // Collapse whitespace runs to a single space and trim — turns multi-line or
