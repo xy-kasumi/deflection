@@ -29,10 +29,12 @@ export interface Directional {
   max(): { dir: Vec3; value: number };
   sample(nDirs: number): DirectionalSample[];
   /**
-   * Raw terms for callers that need the matrices directly (e.g. shader
-   * uniforms or sparse spot-check against a GPU-side δ).
+   * Terms for GPU evaluation, at most `maxTerms`. When the true term count
+   * exceeds the cap the smallest terms are folded into a single residue term
+   * — an N=identity term, since |I·d| = 1 — that upper-bounds them. So the
+   * GPU sees a slight over-estimate; `at`/`max`/`sample` stay exact.
    */
-  terms(): readonly DeltaTerm[];
+  termsForGpuCompute(maxTerms: number): readonly DeltaTerm[];
 }
 
 /**
@@ -156,7 +158,51 @@ function makeDirectional(ts: DeltaTerm[]): Directional {
     return out;
   }
 
-  return { at, max: findMax, sample, terms: () => ts };
+  const dir: Directional = {
+    at,
+    max: findMax,
+    sample,
+    termsForGpuCompute: (maxTerms) => capTerms(ts, maxTerms),
+  };
+  rawTerms.set(dir, ts);
+  return dir;
+}
+
+// Exact terms of each makeDirectional-built Directional. The public accessor
+// (termsForGpuCompute) is intentionally lossy, so sumDirectionals recovers the
+// originals here to keep the sum exact.
+const rawTerms = new WeakMap<Directional, readonly DeltaTerm[]>();
+
+/** Exact sum of Directionals: δ(d) = Σ δ_i(d). Concatenates term lists. */
+export function sumDirectionals(ds: Directional[]): Directional {
+  const all: DeltaTerm[] = [];
+  for (const d of ds) {
+    const raw = rawTerms.get(d);
+    if (raw) all.push(...raw);
+  }
+  return makeDirectional(all);
+}
+
+// At most `maxTerms` terms for a fixed-size GPU uniform array. Keep the largest
+// by F·‖N‖_F; fold the rest into one residue term. Since |N·d| ≤ ‖N‖_F for unit
+// d, c = Σ_residue F·‖N‖_F upper-bounds the dropped terms, and an N=identity
+// term reproduces that constant (|I·d| = 1).
+function capTerms(ts: readonly DeltaTerm[], maxTerms: number): readonly DeltaTerm[] {
+  if (ts.length <= maxTerms) return ts;
+  const ranked = ts
+    .map((t) => ({ t, w: t.F * frobenius(t.N) }))
+    .sort((a, b) => b.w - a.w);
+  const kept: DeltaTerm[] = ranked.slice(0, maxTerms - 1).map((r) => r.t);
+  let residue = 0;
+  for (let i = maxTerms - 1; i < ranked.length; i++) residue += ranked[i]!.w;
+  kept.push({ N: [1, 0, 0, 0, 1, 0, 0, 0, 1], F: residue });
+  return kept;
+}
+
+function frobenius(M: Mat3): number {
+  let s = 0;
+  for (let i = 0; i < 9; i++) s += (M[i] as number) * (M[i] as number);
+  return Math.sqrt(s);
 }
 
 // ---------- local math helpers ----------

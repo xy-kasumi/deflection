@@ -397,7 +397,7 @@ export function computeLobeCeilWorld(canvas: HTMLCanvasElement, scaleHalf: numbe
 // cap painting and the lobe renders as a uniform shell — same affordance as
 // the underflow sphere, just at the lobe's natural size.
 function buildNormalLobe(dir: Directional, reuseMat?: THREE.ShaderMaterial): THREE.Mesh {
-  const terms = dir.terms();
+  const terms = dir.termsForGpuCompute(MAX_LOADS);
   const nLoads = Math.min(terms.length, MAX_LOADS);
   const dMax = dir.max().value;
   const dMaxInv = dMax > 0 ? 1 / dMax : 0;
