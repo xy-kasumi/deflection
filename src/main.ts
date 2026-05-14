@@ -110,8 +110,14 @@ function render() {
 // Redraw scene + breakdown from the last render — no re-parse / re-simulate.
 // Used when only display state changed (selection, mode).
 function redraw() {
-  if (!last) return;
   redrawScene();
+  redrawBreakdown();
+}
+
+// Just the breakdown pane + direction picker. The dir-pick path uses this —
+// the Realistic lobe doesn't move, so the 3D scene is left untouched.
+function redrawBreakdown() {
+  if (!last) return;
   const { ls, out } = last;
   if (out.kind === 'error') {
     pickerHostEl.style.display = 'none';
@@ -166,10 +172,10 @@ function sameHover(a: HoverKey | null, b: HoverKey | null): boolean {
 }
 
 // Direction picked on the Realistic-mode equirectangular picker — re-decompose
-// the breakdown at it.
+// the breakdown at it. The 3D scene is unaffected, so skip redrawScene().
 function onPickDir(d: Vec3) {
   selectedDir = d;
-  redraw();
+  redrawBreakdown();
 }
 
 function findBeamAtOffset(defs: BeamDef[], offset: number): number | null {

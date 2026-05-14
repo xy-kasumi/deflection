@@ -18,6 +18,7 @@ export class DirPicker {
   private deflection: Directional | null = null;
   private heatmap: ImageData | null = null;
   private pick: Vec3 | null = null;
+  private dragging = false;
   /** Called with a unit direction when the user picks one. */
   onPick: (d: Vec3) => void = () => {};
 
@@ -75,14 +76,27 @@ export class DirPicker {
     return img;
   }
 
+  // Press-and-drag picking: pointer capture keeps directions flowing even when
+  // the cursor leaves the canvas mid-drag.
   private installInput(): void {
-    this.el.addEventListener('click', (e) => this.onPick(this.dirAt(e)));
+    this.el.addEventListener('pointerdown', (e) => {
+      this.dragging = true;
+      this.el.setPointerCapture(e.pointerId);
+      this.onPick(this.dirAt(e));
+    });
+    this.el.addEventListener('pointermove', (e) => {
+      if (this.dragging) this.onPick(this.dirAt(e));
+    });
+    const stop = () => { this.dragging = false; };
+    this.el.addEventListener('pointerup', stop);
+    this.el.addEventListener('pointercancel', stop);
   }
 
   private dirAt(e: { clientX: number; clientY: number }): Vec3 {
     const rect = this.el.getBoundingClientRect();
-    const px = ((e.clientX - rect.left) / rect.width) * W;
-    const py = ((e.clientY - rect.top) / rect.height) * H;
+    // Clamp: a drag past the edge sticks to it rather than wrapping.
+    const px = Math.max(0, Math.min(W, ((e.clientX - rect.left) / rect.width) * W));
+    const py = Math.max(0, Math.min(H, ((e.clientY - rect.top) / rect.height) * H));
     return unproject(px, py);
   }
 }
