@@ -1,8 +1,7 @@
-import type { Beam, DeflectionQuery, Load, Problem, Vec3 } from './problem';
+import type { DeflectionQuery, Problem, Vec3 } from './problem';
 import { buildCompliances } from './compliance';
 import type { Compliances, Mat3, Mode } from './compliance';
 import { directionalFor, beamDirectionals, type Directional } from './directional';
-import { decompose } from './decompose';
 
 export type SimOutcome = SimResult | SimError;
 
@@ -35,29 +34,8 @@ export interface DeflectionQueryResult {
   deflection: Directional;
   /** Per-beam (and per-mode) δ in isolation; do not sum to deflection. */
   beamDeflections: BeamDeflection[];
-  /** `deflection.max()` broken down per contributing load. */
-  loads: LoadContribution[];
-  /** `deflection.max()` broken down per contributing beam. */
-  beams: BeamContribution[];
   /** The per-load worst-case forces that realize δ toward `dir`. */
   forcesAt(dir: Vec3): Force[];
-}
-
-export interface LoadContribution {
-  loadIx: number;
-  load: Load;
-  /** signed contribution along deflection.max() */
-  delta_mm: number;
-}
-
-export interface BeamContribution {
-  beamIx: number;
-  beam: Beam;
-  /** signed total along deflection.max() (= sum of the 3 below) */
-  delta_mm: number;
-  delta_mm_bendIx: number;
-  delta_mm_bendIy: number;
-  delta_mm_torsionJ: number;
 }
 
 export interface BeamDeflection {
@@ -118,8 +96,8 @@ export function simulate(problem: Problem): SimOutcome {
   const compliances = buildCompliances(problem);
   if ('kind' in compliances) return compliances; // SimError
 
-  // Per-query Directional.max() gives (d*, δ_max). Decompose along d* eagerly
-  // so the UI can switch the selected query without recomputing.
+  // One result per query. All direction-dependent work is deferred to the
+  // result's own methods (forcesAt) and SimResult.under() — see those.
   const queryResults: DeflectionQueryResult[] = [];
   for (let queryIx = 0; queryIx < problem.queries.length; queryIx++) {
     const query = problem.queries[queryIx]!;
@@ -129,36 +107,12 @@ export function simulate(problem: Problem): SimOutcome {
       beam.frame.origin_mm[1] + beam.frame.axial[1] * query.offset_mm,
       beam.frame.origin_mm[2] + beam.frame.axial[2] * query.offset_mm,
     ];
-    const deflection = directionalFor(compliances, queryIx);
-    const { dir, value } = deflection.max();
-
-    let loads: LoadContribution[] = [];
-    let beamContribs: BeamContribution[] = [];
-    if (value > 0 && compliances.loadNodes.length > 0) {
-      const decomp = decompose(compliances, queryIx, dir);
-      loads = decomp.perLoad.map((pl) => ({
-        loadIx: pl.loadIx,
-        load: problem.loads[pl.loadIx]!,
-        delta_mm: pl.delta_mm,
-      }));
-      beamContribs = decomp.perBeam.map((pb) => ({
-        beamIx: pb.beamIx,
-        beam: beams[pb.beamIx]!,
-        delta_mm: pb.total_mm,
-        delta_mm_bendIx: pb.bendIx_mm,
-        delta_mm_bendIy: pb.bendIy_mm,
-        delta_mm_torsionJ: pb.torsionJ_mm,
-      }));
-    }
-
     queryResults.push({
       queryIx,
       query,
       pos_mm: worldPos,
-      deflection: deflection,
+      deflection: directionalFor(compliances, queryIx),
       beamDeflections: beamDirectionals(compliances, queryIx),
-      loads,
-      beams: beamContribs,
       forcesAt: (dir) => computeForces(compliances, queryIx, dir),
     });
   }
