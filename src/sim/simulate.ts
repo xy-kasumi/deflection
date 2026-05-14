@@ -37,6 +37,8 @@ export interface DeflectionQueryResult {
   loads: LoadContribution[];
   /** `deflection_mm.max()` broken down per contributing beam. */
   beams: BeamContribution[];
+  /** The per-load worst-case forces that realize δ toward `dir`. */
+  forcesAt(dir: Vec3): Force[];
 }
 
 export interface LoadContribution {
@@ -147,6 +149,7 @@ export function simulate(problem: Problem): SimOutcome {
       deflection_mm: deflection,
       loads,
       beams: beamContribs,
+      forcesAt: (dir) => computeForces(compliances, queryIx, dir),
     });
   }
 
@@ -213,12 +216,47 @@ function applyForces(
   return { forces, queryResults: out };
 }
 
+// The per-load worst-case forces F_p* that realize δ_q toward `dir`: each load
+// independently maximizes its own contribution along `dir`.
+function computeForces(c: Compliances, queryIx: number, dir: Vec3): Force[] {
+  const dn = normalizeOrZero(dir);
+  const forces: Force[] = [];
+  for (const t of c.totals) {
+    if (t.queryIx !== queryIx) continue;
+    const Fmax = c.loadFmax_N[t.loadIx] ?? 0;
+    let F_N: Vec3 = [0, 0, 0];
+    if (dn) {
+      const v = matVecT(t.C, dn);
+      const mag = Math.hypot(v[0], v[1], v[2]);
+      if (mag > 1e-30) {
+        F_N = [Fmax * v[0] / mag, Fmax * v[1] / mag, Fmax * v[2] / mag];
+      }
+    }
+    forces.push({ loadIx: t.loadIx, F_N });
+  }
+  return forces;
+}
+
 function matVec(M: Mat3, v: Vec3): Vec3 {
   return [
     M[0] * v[0] + M[1] * v[1] + M[2] * v[2],
     M[3] * v[0] + M[4] * v[1] + M[5] * v[2],
     M[6] * v[0] + M[7] * v[1] + M[8] * v[2],
   ];
+}
+
+function matVecT(M: Mat3, v: Vec3): Vec3 {
+  return [
+    M[0] * v[0] + M[3] * v[1] + M[6] * v[2],
+    M[1] * v[0] + M[4] * v[1] + M[7] * v[2],
+    M[2] * v[0] + M[5] * v[1] + M[8] * v[2],
+  ];
+}
+
+function normalizeOrZero(v: Vec3): Vec3 | null {
+  const m = Math.hypot(v[0], v[1], v[2]);
+  if (m < 1e-30) return null;
+  return [v[0] / m, v[1] / m, v[2] / m];
 }
 
 function addInto(a: Vec3, b: Vec3): void {
