@@ -7,7 +7,8 @@ export type SimOutcome = SimResult | SimError;
 
 export interface SimResult {
   kind: 'ok';
-  queryResults: DeflectionQueryResult[]; // 1:1 with Problem.queries, same order
+  /** 1:1 with Problem.queries, same order */
+  queryResults: DeflectionQueryResult[];
 }
 
 export interface SimError {
@@ -16,30 +17,34 @@ export interface SimError {
   message: string;
 }
 
-// Per-query result. `deflection_mm` is the full δ(dir) distribution; the
-// headline (d*, δ_max) comes from `deflection_mm.max()`. `loads` / `beams`
-// break that max down so a query can be selected in the UI without re-running
-// the math. All vectors here are world-frame; `pos_mm` is the undeformed
-// reference position.
+/**
+ * Per-query result. All vectors here are world-frame.
+ */
 export interface DeflectionQueryResult {
   queryIx: number;
   query: DeflectionQuery;
+  /** Undeformed position. */
   pos_mm: Vec3;
+  /** Full δ(dir) distribution. */
   deflection_mm: Directional;
+  /** `deflection_mm.max()` broken down per contributing load. */
   loads: LoadContribution[];
+  /** `deflection_mm.max()` broken down per contributing beam. */
   beams: BeamContribution[];
 }
 
 export interface LoadContribution {
   loadIx: number;
   load: Load;
-  delta_mm: number; // signed contribution along deflection_mm.max()
+  /** signed contribution along deflection_mm.max() */
+  delta_mm: number;
 }
 
 export interface BeamContribution {
   beamIx: number;
   beam: Beam;
-  delta_mm: number; // signed total along deflection_mm.max() (= sum of the 3 below)
+  /** signed total along deflection_mm.max() (= sum of the 3 below) */
+  delta_mm: number;
   delta_mm_bendIx: number;
   delta_mm_bendIy: number;
   delta_mm_torsionJ: number;
@@ -49,8 +54,10 @@ export interface BeamContribution {
 // anything beyond this is a genuinely disconnected input.
 const CONNECT_EPS_MM = 1e-6;
 
-// Solve the deflection problem. Either succeeds with one result per query, or
-// fails — there is no silent fallback. See SimError for the failure modes.
+/**
+ * Solve the deflection problem. Either succeeds with one result per query, or
+ * fails — there is no silent fallback. See SimError for the failure modes.
+ */
 export function simulate(problem: Problem): SimOutcome {
   const invalid = validate(problem);
   if (invalid) return invalid;

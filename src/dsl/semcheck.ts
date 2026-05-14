@@ -7,8 +7,10 @@ const KNOWN_MATERIALS = new Set(['plastic', 'aluminum', 'steel']);
 const KNOWN_SHAPES = new Set(['rect', 'round', 'section']);
 const KNOWN_ATTACHMENTS = new Set(['load']);
 
-// All semantic issues are warnings — the structure still walks/renders, just
-// with sensible fallbacks. Hard syntax errors are emitted at parse time.
+/**
+ * All semantic issues are warnings — the structure still walks/renders, just
+ * with sensible fallbacks. Hard syntax errors are emitted at parse time.
+ */
 export function semcheck(s: Structure): Diagnostic[] {
   const diags: Diagnostic[] = [];
 

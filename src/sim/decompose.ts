@@ -16,12 +16,14 @@ import type { Vec3 } from './problem';
 
 export interface PerLoadContribution {
   loadIx: number;
-  delta_mm: number; // signed contribution to δ along d
+  /** signed contribution to δ along dir */
+  delta_mm: number;
 }
 
 export interface PerBeamContribution {
   beamIx: number;
-  total_mm: number; // = bendIx_mm + bendIy_mm + torsionJ_mm
+  /** = bendIx_mm + bendIy_mm + torsionJ_mm */
+  total_mm: number;
   bendIx_mm: number;
   bendIy_mm: number;
   torsionJ_mm: number;

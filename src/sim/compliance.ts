@@ -1,16 +1,18 @@
 import type { Beam, Frame, Problem, Vec3 } from './problem';
 import type { SimError } from './simulate';
 
-// 3×3 row-major matrix: [m00, m01, m02, m10, m11, m12, m20, m21, m22].
+/** 3×3 row-major matrix: [m00, m01, m02, m10, m11, m12, m20, m21, m22]. */
 export type Mat3 = [
   number, number, number,
   number, number, number,
   number, number, number,
 ];
 
-// Deflection modes. bendIx is resisted by section Ix → deflects in beam-Y;
-// bendIy is resisted by Iy → deflects in beam-X; torsionJ twists about the
-// beam axis (resisted by J).
+/**
+ * Deflection modes. bendIx is resisted by section Ix → deflects in beam-Y;
+ * bendIy is resisted by Iy → deflects in beam-X; torsionJ twists about the
+ * beam axis (resisted by J).
+ */
 export type Mode = 'torsionJ' | 'bendIx' | 'bendIy';
 
 export interface Node {
@@ -18,11 +20,13 @@ export interface Node {
   offset_mm: number;
 }
 
-// Load node: 'force' for real loads; 'moment' appears synthetically for the
-// fixed-fixed clamp-moment reaction, paired with a synthetic clamp-force
-// reaction. `source` is 'real' for caller-supplied loads, 'clamp' for the
-// synthetic fixed-fixed reactions — the latter are popped before Compliances
-// is returned, so externally every load is 'real' / 'force'.
+/**
+ * Load node: 'force' for real loads; 'moment' appears synthetically for the
+ * fixed-fixed clamp-moment reaction, paired with a synthetic clamp-force
+ * reaction. `source` is 'real' for caller-supplied loads, 'clamp' for the
+ * synthetic fixed-fixed reactions — the latter are popped before Compliances
+ * is returned, so externally every load is 'real' / 'force'.
+ */
 export interface LoadNode extends Node {
   kind: 'force' | 'moment';
   source: 'real' | 'clamp';
@@ -33,19 +37,25 @@ export interface ComplianceEntry {
   loadIx: number;
   beamIx: number;
   mode: Mode;
-  // deflection_at_query (world) ← generalized_force_at_load (world).
-  // The columns of C are interpreted per the load's `kind`: a 'force' load
-  // means each column is the response to a unit world force in that axis;
-  // a 'moment' load means each column is the response to a unit world moment.
+  /**
+   * deflection_at_query (world) ← generalized_force_at_load (world).
+   * The columns of C are interpreted per the load's `kind`: a 'force' load
+   * means each column is the response to a unit world force in that axis;
+   * a 'moment' load means each column is the response to a unit world moment.
+   */
   C: Mat3;
 }
 
 export interface Compliances {
-  queryNodes: Node[];          // one per beam end (chain joints)
-  loadNodes: LoadNode[];       // real force loads (post-adjust, no synthetic)
-  loadFmax_N: number[];        // parallel to loadNodes
-  entries: ComplianceEntry[];  // sparse: only nonzero (q, p, b, m)
-  // Precomputed C_tot[q][p] for fast δ(d) evaluation.
+  /** one per beam end (chain joints) */
+  queryNodes: Node[];
+  /** real force loads (post-adjust, no synthetic) */
+  loadNodes: LoadNode[];
+  /** parallel to loadNodes */
+  loadFmax_N: number[];
+  /** sparse: only nonzero (q, p, b, m) */
+  entries: ComplianceEntry[];
+  /** Precomputed C_tot[q][p] for fast δ(d) evaluation. */
   totals: { queryIx: number; loadIx: number; C: Mat3 }[];
 }
 

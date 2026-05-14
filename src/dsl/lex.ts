@@ -17,16 +17,12 @@ export interface Token {
   kind: TokenKind;
   text: string;
   span: Span;
-  // QUANTITY:
-  prefix?: string;
-  value?: number;
-  unit?: string;
-  // KW_DIR:
-  dir?: Dir;
-  // KW_LOC:
-  locKw?: LocKw;
-  // IDENT / KW_BEAM:
-  name?: string;
+  /** QUANTITY */ prefix?: string;
+  /** QUANTITY */ value?: number;
+  /** QUANTITY */ unit?: string;
+  /** KW_DIR */ dir?: Dir;
+  /** KW_LOC */ locKw?: LocKw;
+  /** IDENT / KW_BEAM */ name?: string;
 }
 
 const DIRS: Record<string, Dir> = {
@@ -48,8 +44,10 @@ const isUpper = (c: string) => c >= 'A' && c <= 'Z';
 const isLetter = (c: string) => isLower(c) || isUpper(c);
 const isUnitChar = (c: string) => isLetter(c) || isDigit(c) || c === '/';
 
-// Lex one logical line. `baseOffset` is the byte offset of the start of this
-// line in the full source, so all token spans are absolute.
+/**
+ * Lex one logical line. `baseOffset` is the byte offset of the start of this
+ * line in the full source, so all token spans are absolute.
+ */
 export function lex(line: string, baseOffset: number): {
   tokens: Token[];
   diagnostics: Diagnostic[];
@@ -191,8 +189,10 @@ export function lex(line: string, baseOffset: number): {
   return { tokens, diagnostics };
 }
 
-// Split source into lines with their byte offsets. Preserves trailing empty
-// line iff the source ends with a newline (so spans line up).
+/**
+ * Split source into lines with their byte offsets. Preserves trailing empty
+ * line iff the source ends with a newline (so spans line up).
+ */
 export function splitLines(src: string): { text: string; start: number }[] {
   const out: { text: string; start: number }[] = [];
   let start = 0;

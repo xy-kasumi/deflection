@@ -8,8 +8,10 @@
 
 export type Vec3 = [number, number, number];
 
-// Beam-local frame expressed in world coords. (ex, ey) span the cross-sectional
-// plane; axial is the beam axis. Orthonormal right-handed: ex × ey = axial.
+/**
+ * Beam-local frame expressed in world coords. (ex, ey) span the cross-sectional
+ * plane; axial is the beam axis. Orthonormal right-handed: ex × ey = axial.
+ */
 export interface Frame {
   origin_mm: Vec3;
   ex: Vec3;
@@ -17,11 +19,13 @@ export interface Frame {
   axial: Vec3;
 }
 
-// Resolved cross-section, beam-local. Ix = ∫ey² dA resists bending in ey;
-// Iy = ∫ex² dA resists bending in ex.
+/** Resolved cross-section, beam-local. */
 export interface Section {
+  /** Second moment of area resisting bending in the ey direction. */
   Ix_mm4: number;
+  /** Second moment of area resisting bending in the ex direction. */
   Iy_mm4: number;
+  /** Torsion constant. */
   J_mm4: number;
 }
 
@@ -37,15 +41,17 @@ export interface Beam {
   material: Material;
 }
 
-// A load fully resolved to a world-force magnitude. Mass·acceleration body
-// loads are pre-expanded into ordinary `Load`s by the caller.
+/**
+ * A load fully resolved to a world-force magnitude. Mass·acceleration body
+ * loads are pre-expanded into ordinary `Load`s by the caller.
+ */
 export interface Load {
   beamIx: number;
   offset_mm: number;
   Fmax_N: number;
 }
 
-// A point at which to evaluate the deflection distribution δ(d).
+/** A point at which to evaluate the deflection distribution δ(d). */
 export interface DeflectionQuery {
   beamIx: number;
   offset_mm: number;

@@ -16,24 +16,30 @@ import type { Vec3 } from './problem';
 
 export interface DirectionalSample { dir: Vec3; value: number; }
 
-// One {N, F} pair in the sum δ(d) = Σ F·|N·d|. The Minkowski sum interpretation
-// from the file header: each term is a load's contribution as an ellipsoid
-// support function.
+/**
+ * One {N, F} pair in the sum δ(d) = Σ F·|N·d|. The Minkowski sum interpretation
+ * from the file header: each term is a load's contribution as an ellipsoid
+ * support function.
+ */
 export interface DeltaTerm { N: Mat3; F: number; }
 
 export interface Directional {
   at(dir: Vec3): number;
   max(): { dir: Vec3; value: number };
   sample(nDirs: number): DirectionalSample[];
-  // Raw terms for callers that need the matrices directly (e.g. shader
-  // uniforms or sparse spot-check against a GPU-side δ).
+  /**
+   * Raw terms for callers that need the matrices directly (e.g. shader
+   * uniforms or sparse spot-check against a GPU-side δ).
+   */
   terms(): readonly DeltaTerm[];
 }
 
-// Canonical evaluation of δ on a *unit* direction. The lobe vertex shader is
-// a line-for-line GLSL twin of this function; the sparse cpuDelta spot-check
-// in the lobe geometry halo-paints any per-vertex disagreement, so the two
-// implementations must stay in sync.
+/**
+ * Canonical evaluation of δ on a *unit* direction. The lobe vertex shader is
+ * a line-for-line GLSL twin of this function; the sparse cpuDelta spot-check
+ * in the lobe geometry halo-paints any per-vertex disagreement, so the two
+ * implementations must stay in sync.
+ */
 export function delta(d_unit: Vec3, terms: readonly DeltaTerm[]): number {
   let s = 0;
   for (const { N, F } of terms) {
@@ -43,7 +49,7 @@ export function delta(d_unit: Vec3, terms: readonly DeltaTerm[]): number {
   return s;
 }
 
-// Build a Directional for query q. Internally caches C_tot[q][p]^T per load.
+/** Build a Directional for query q. Internally caches C_tot[q][p]^T per load. */
 export function directionalFor(c: Compliances, queryIx: number): Directional {
   const ts: DeltaTerm[] = [];
   for (const t of c.totals) {
