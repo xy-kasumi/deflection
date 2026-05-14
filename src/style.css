@@ -1,7 +1,5 @@
 /* Design tokens — single source of truth for the UI chrome's visual
-   language. Mode-* hues intentionally share hex values with scene/tokens.ts
-   so the breakdown bars carry the same emotional register as the 3D scene
-   (greys = structural, orange = load, green/blue = editor focus). */
+   language. */
 :root {
   --text-fg:    #1f2328;
   --text-muted: #6a737d;
@@ -14,12 +12,6 @@
   --overlay-bg:        rgba(255, 255, 255, 0.85);
   --overlay-bg-strong: rgba(255, 255, 255, 0.92);
   --overlay-shadow:    0 1px 3px rgba(0, 0, 0, 0.08);
-
-  /* Beam-mode swatches for the breakdown chips. Bend/torsion hues mirror
-     scene/tokens.ts COLOR.{walkerHintCurrent, beamCurrent, deformed}. */
-  --mode-bend-x:  #2e7d32;
-  --mode-bend-y:  #2563eb;
-  --mode-torsion: #d97a1a;
 
   /* Diagnostic squiggles. The error red is deliberately *not* the scene's
      deformedPeak — that one means "off-scale", this one means "wrong". */
@@ -95,11 +87,16 @@ html, body {
   color: var(--text-muted);
 }
 
-#info .bd-row {
+#info .bd-beams {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 6px;
+  grid-template-columns: 1fr auto auto auto auto;
+  column-gap: 12px;
   color: var(--text-fg);
+}
+
+#info .bd-beams .hdr,
+#info .bd-beams .total {
+  color: var(--text-muted);
 }
 
 #info .bd-loads {
@@ -115,10 +112,19 @@ html, body {
   text-align: right;
 }
 
-#info .bd-row .frac,
+#info .bd-beams .hdr,
+#info .bd-beams .frac,
+#info .bd-loads .frac {
+  text-align: right;
+}
+
 #info .bd-loads .frac {
   color: var(--text-muted);
-  text-align: right;
+}
+
+/* The empty top-left header cell still needs to claim its grid slot. */
+#info .bd-beams .hdr:first-child {
+  text-align: left;
 }
 
 #info .bd-beamtag {
@@ -127,17 +133,6 @@ html, body {
   border-radius: var(--radius-sm);
   padding: 0 4px;
 }
-
-#info .bd-bar {
-  display: inline-block;
-  height: 6px;
-  border-radius: var(--radius-sm);
-  margin-right: 6px;
-  vertical-align: middle;
-}
-#info .bd-bar.bx  { background: var(--mode-bend-x); }
-#info .bd-bar.by  { background: var(--mode-bend-y); }
-#info .bd-bar.tor { background: var(--mode-torsion); }
 
 #info .bd-empty { color: var(--text-muted); font-style: italic; }
 

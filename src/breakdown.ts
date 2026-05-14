@@ -40,27 +40,30 @@ export function renderBreakdown(
 
   // Beams section — before loads: "which beam to stiffen" is the actionable
   // question. Per-mode fractions can be negative (a mode that opposes d*).
+  // The two bend modes carry an arrow glyph for the two orthogonal bending
+  // planes; torsion is the plain word "twist" — it has no chirality to point.
   if (sel.beams.length > 0) {
     el.appendChild(sectionHeader('beams'));
-    for (const b of sel.beams) {
-      const bx = fractionOf(b.delta_mm_bendIx, deltaMax);
-      const by = fractionOf(b.delta_mm_bendIy, deltaMax);
-      const tor = fractionOf(b.delta_mm_torsion, deltaMax);
-      const row = document.createElement('div');
-      row.className = 'bd-row';
-      const left = document.createElement('span');
-      left.append(modeChip('bx', bx));
-      left.append(modeChip('by', by));
-      left.append(modeChip('tor', tor));
-      const lbl = document.createElement('span');
-      lbl.textContent = `beam${b.beamIx}  bx ${formatPct(bx)}  by ${formatPct(by)}  tor ${formatPct(tor)}`;
-      left.appendChild(lbl);
-      const right = document.createElement('span');
-      right.className = 'frac';
-      right.textContent = formatPct(fractionOf(b.delta_mm, deltaMax));
-      row.append(left, right);
-      el.appendChild(row);
+    const grid = document.createElement('div');
+    grid.className = 'bd-beams';
+    for (const text of ['', 'bend↕', 'bend↔', 'twist', 'total']) {
+      const h = document.createElement('span');
+      h.className = 'hdr';
+      h.textContent = text;
+      grid.append(h);
     }
+    for (const b of sel.beams) {
+      const name = document.createElement('span');
+      name.textContent = `beam${b.beamIx}`;
+      grid.append(
+        name,
+        fracCell(fractionOf(b.delta_mm_bendIx, deltaMax)),
+        fracCell(fractionOf(b.delta_mm_bendIy, deltaMax)),
+        fracCell(fractionOf(b.delta_mm_torsion, deltaMax)),
+        fracCell(fractionOf(b.delta_mm, deltaMax), true),
+      );
+    }
+    el.appendChild(grid);
   }
 
   // Loads section. One shared grid so columns align across rows.
@@ -134,12 +137,13 @@ function compact(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-function modeChip(cls: string, frac: number): HTMLElement {
-  const bar = document.createElement('span');
-  bar.className = `bd-bar ${cls}`;
-  const width = Math.max(0, Math.min(1, Math.abs(frac))) * 24 + 2;
-  bar.style.width = `${width}px`;
-  return bar;
+// One right-aligned percentage cell in the beams grid. `total` cells render
+// muted, matching the header.
+function fracCell(frac: number, total = false): HTMLElement {
+  const cell = document.createElement('span');
+  cell.className = total ? 'frac total' : 'frac';
+  cell.textContent = formatPct(frac);
+  return cell;
 }
 
 export function formatMm(v: number): string {
