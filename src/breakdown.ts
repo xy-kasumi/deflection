@@ -41,6 +41,7 @@ export function renderBreakdown(
   src: string,
   mode: DisplayMode,
   onHover: (h: HoverKey | null) => void,
+  pickedDir: Vec3 | null,
 ): void {
   el.innerHTML = '';
 
@@ -54,7 +55,7 @@ export function renderBreakdown(
 
   const rows = mode === 'simple'
     ? simpleRows(sel)
-    : realisticRows(sim, sel, selectedNodeIx);
+    : realisticRows(sim, sel, selectedNodeIx, pickedDir);
 
   // Header: the δ value, then where it's measured. Simple shows the
   // pessimistic bound it renders (δ ≲ …), Realistic the true worst case
@@ -154,11 +155,26 @@ interface BreakdownRows {
   perLoad: { loadIx: number; delta_mm: number }[];
 }
 
-// Realistic: the exact deflection resolved in the true worst-case direction
-// d*. Apply d*'s worst-case forces and read the determined contributions
-// projected onto d* — signed, summing exactly to δ(d*).
-function realisticRows(sim: SimResult, sel: DeflectionQueryResult, selIx: number): BreakdownRows {
-  const { dir, value: deltaMax } = sel.deflection.max();
+// Realistic: the exact deflection resolved in a direction — the user-picked
+// dir, or the true worst case d* when none is picked. Apply that direction's
+// worst-case forces and read the determined contributions projected onto it —
+// signed, summing exactly to δ(dir).
+function realisticRows(
+  sim: SimResult,
+  sel: DeflectionQueryResult,
+  selIx: number,
+  pickedDir: Vec3 | null,
+): BreakdownRows {
+  let dir: Vec3;
+  let deltaMax: number;
+  if (pickedDir) {
+    dir = pickedDir;
+    deltaMax = sel.deflection.at(pickedDir);
+  } else {
+    const m = sel.deflection.max();
+    dir = m.dir;
+    deltaMax = m.value;
+  }
   const dd = sim.under(sel.forcesAt(dir)).queryResults[selIx];
   if (!dd) return { deltaMax, glyph: '≈', perBeam: [], perLoad: [] };
   return {

@@ -5,6 +5,7 @@ import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
 import { buildLoadSystem, simErrorToDiagnostic } from './loadsystem';
 import { simulate, type SimResult } from './sim/simulate';
+import type { Vec3 } from './sim/problem';
 import { renderBreakdown, type DisplayMode, type HoverKey } from './breakdown';
 
 const INITIAL_SRC = `support(single)
@@ -30,6 +31,9 @@ let mode: DisplayMode = 'realistic';
 // Hovered breakdown component (Simple mode only) — swaps the selected node's
 // lobe to that component's isolated δ.
 let hovered: HoverKey | null = null;
+// User-picked direction for the selected node (Realistic mode) — null means
+// decompose at the auto worst-case d*. Reset whenever the selection changes.
+let selectedDir: Vec3 | null = null;
 
 // Last full render's parse/sim outputs — redraw() draws from this without
 // re-parsing. render() refreshes it; redraw()/redrawScene() consume it.
@@ -102,11 +106,14 @@ function redraw() {
   redrawScene();
   const { ls, out } = last;
   if (out.kind === 'error') {
-    renderBreakdown(infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode, onHover);
+    renderBreakdown(
+      infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode, onHover, selectedDir,
+    );
   } else {
     const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
     renderBreakdown(
-      infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode, onHover,
+      infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode,
+      onHover, selectedDir,
     );
   }
   updateScaleButtons();
