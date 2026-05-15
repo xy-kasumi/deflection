@@ -126,7 +126,10 @@ function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
 }
 
 // Full pass: parse → simulate. Caches the result in `last`, then draws.
-function render() {
+// `autoRescale` re-picks δ-exag to fit the currently selected/tip query node;
+// fired on initial load and after structural edits so the lobe stays visible
+// without manually clicking ×10 / ×100. Cursor-only events skip it.
+function render(opts?: { autoRescale?: boolean }) {
   const { structure, diagnostics: pd } = parse(lastSrc);
   const sd = semcheck(structure);
   const { beams, diagnostics: wd } = walk(structure);
@@ -148,6 +151,21 @@ function render() {
 
   last = { beams, ls, out, currentBeamIx };
   redraw();
+
+  // Auto-rescale runs after redraw so scene.scaleHalf reflects the just-built
+  // chain — recommendDisplayScale needs it to compute the overflow ceiling.
+  if (opts?.autoRescale && lastSim) {
+    const selectedNodeIx = resolveSelectedNodeIx(lastSim, ls.tipQueryIx);
+    const node = lastSim.queryResults[selectedNodeIx];
+    if (node) {
+      const recommended = scene.recommendDisplayScale(node.deflection_mm.max().value);
+      if (recommended !== currentScale) {
+        currentScale = recommended;
+        updateScaleButtons();
+        scene.setDisplayScale(recommended);
+      }
+    }
+  }
 }
 
 // Redraw scene + breakdown from the last render — no re-parse / re-simulate.
@@ -230,7 +248,7 @@ const editor = new Editor(
   INITIAL_SRC,
   (src) => {
     lastSrc = src;
-    render();
+    render({ autoRescale: true });
   },
   ({ offset, focused }) => {
     cursorOffset = offset;
@@ -239,7 +257,7 @@ const editor = new Editor(
   },
 );
 
-render();
+render({ autoRescale: true });
 
 // Console hook: window.dbg.{scene, sim, scale, ...}. Live objects (not a
 // snapshot) so devtools can drill into THREE internals via reflection.

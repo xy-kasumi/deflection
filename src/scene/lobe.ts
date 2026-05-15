@@ -293,7 +293,6 @@ export class LobeRenderer {
       const up = new THREE.Vector3(...beams[n.query.beamIx]!.startFrame.up);
       const labelPos = worldPos.clone().add(up.multiplyScalar(opts.labelOffset));
       const classes: string[] = [];
-      if (opts.focused) classes.push('hidden');
       if (isSel) classes.push('selected');
       labels.push({
         text: `δ ${formatMm(delta_max_mm)}`,

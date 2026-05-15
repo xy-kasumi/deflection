@@ -319,8 +319,6 @@ html, body {
   background: var(--overlay-bg-strong);
 }
 
-.scene-label.hidden { display: none; }
-
 /* Contribution segment is on screen — fade labels so they don't occlude it
    (and pointer-events off so the invisible hit-area doesn't intercept clicks). */
 .scene-labels.faded .scene-label { opacity: 0; pointer-events: none; }
