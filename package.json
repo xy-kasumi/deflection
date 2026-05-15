@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "smoke": "tsx scripts/smoke-compliance.ts",
+    "smoke": "tsx scripts/smoke-compliance.ts && tsx scripts/smoke-segment.ts",
     "test": "npm run -s typecheck && npm run -s smoke",
     "prepare": "git config core.hooksPath .githooks"
   },
