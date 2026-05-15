@@ -7,7 +7,7 @@ import { buildLoadSystem, simErrorToDiagnostic } from './loadsystem';
 import { simulate, type SimResult } from './sim/simulate';
 import { renderBreakdown, type DecompFormat, type HoverHandlers } from './breakdown';
 import type { Mode } from './sim/compliance';
-import type { HoverSegment } from './scene/lobe';
+import type { Stick } from './scene/stick';
 
 const INITIAL_SRC = `support(single)
 mass_accel(2G)
@@ -78,25 +78,25 @@ const hoverHandlers: HoverHandlers = {
   enter(keys) {
     cancelHoverLeave();
     hoverKeys = keys;
-    scene.setHoverSegment(computeHoverSegments());
+    scene.setSticks(computeSticks());
   },
   leave() {
     cancelHoverLeave();
     hoverLeaveTimer = window.setTimeout(() => {
       hoverLeaveTimer = null;
       hoverKeys = null;
-      scene.setHoverSegment(null);
+      scene.setSticks(null);
     }, HOVER_LEAVE_GRACE_MS);
   },
 };
 
-// Resolve the hovered (beam, mode) keys to concrete segments at *every* query
-// node in the chain. Each sub-mode is rank-1, so each (query, beam, mode)
-// gives a single direction + magnitude; pessimistic decomposition has no
-// shared loads / shared direction across queries, so we emit them all.
-function computeHoverSegments(): HoverSegment[] | null {
+// Resolve the hovered (beam, mode) keys to one stick per query node in the
+// chain. Each sub-mode is rank-1, so each (query, beam, mode) gives a single
+// direction + magnitude; pessimistic decomposition has no shared loads /
+// shared direction across queries, so we emit them all.
+function computeSticks(): Stick[] | null {
   if (!hoverKeys || !lastSim) return null;
-  const segs: HoverSegment[] = [];
+  const sticks: Stick[] = [];
   for (const node of lastSim.queryResults) {
     for (const key of hoverKeys) {
       const bd = node.beamDeflections.find((b) => b.beamIx === key.beamIx);
@@ -105,13 +105,13 @@ function computeHoverSegments(): HoverSegment[] | null {
       if (!bm) continue;
       const { dir_unit, value } = bm.deflection_mm.max();
       if (value === 0) continue;
-      segs.push({
+      sticks.push({
         origin_mm: node.pos_mm,
         vector_mm: [dir_unit[0] * value, dir_unit[1] * value, dir_unit[2] * value],
       });
     }
   }
-  return segs.length ? segs : null;
+  return sticks.length ? sticks : null;
 }
 
 function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
@@ -164,7 +164,7 @@ function redrawBreakdown() {
   // timer would fire post-rebuild and clobber a fresh hover.
   cancelHoverLeave();
   hoverKeys = null;
-  scene.setHoverSegment(null);
+  scene.setSticks(null);
   const { ls, out } = last;
   if (out.kind === 'error') {
     renderBreakdown(

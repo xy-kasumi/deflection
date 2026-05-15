@@ -3,7 +3,8 @@ import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
 import { COLOR, VU, MOTION } from './tokens';
 import { Labels } from './labels';
-import { LobeRenderer, computeLobeCeilWorld, type HoverSegment } from './lobe';
+import { LobeRenderer, computeLobeCeilWorld } from './lobe';
+import { StickRenderer, type Stick } from './stick';
 import { buildChain } from './chain';
 
 const ISO_YAW_DEG = 45;
@@ -36,6 +37,7 @@ export class Scene {
   private raycaster = new THREE.Raycaster();
   private labels: Labels;
   private lobes = new LobeRenderer();
+  private sticks = new StickRenderer();
 
   constructor(canvas: HTMLCanvasElement, onPick: (nodeIx: number) => void) {
     this.onPick = onPick;
@@ -47,10 +49,10 @@ export class Scene {
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10000, 10000);
     this.content = new THREE.Group();
     this.root.add(this.content);
-    // Hover overlay sits at the root, *outside* content. content is disposed
-    // and rebuilt on every update(); the hover group survives so cursor-driven
-    // segments don't blink when an unrelated rebuild happens.
-    this.root.add(this.lobes.getHoverGroup());
+    // Stick overlay sits at the root, *outside* content. content is disposed
+    // and rebuilt on every update(); the stick group survives so cursor-driven
+    // sticks don't blink when an unrelated rebuild happens.
+    this.root.add(this.sticks.getGroup());
     this.yaw = deg(ISO_YAW_DEG);
     this.pitch = deg(ISO_PITCH_DEG);
     this.targetYaw = this.yaw;
@@ -95,10 +97,10 @@ export class Scene {
     const avgL = beams.reduce((s, b) => s + b.length_mm, 0) / beams.length;
     const u = Math.max(1, avgL / 40);
 
-    const hitRadius      = u * VU.hitR;
-    const labelOffset    = u * VU.labelOffset;
-    const lobeFloor      = u * VU.lobeFloorR;
-    const hoverSegRadius = u * VU.hoverSegR;
+    const hitRadius   = u * VU.hitR;
+    const labelOffset = u * VU.labelOffset;
+    const lobeFloor   = u * VU.lobeFloorR;
+    this.sticks.setRadius(u * VU.stickR);
 
     const chain = buildChain(beams, {
       supportKind,
@@ -115,7 +117,7 @@ export class Scene {
 
     if (sim && sim.queryResults.length > 0) {
       const r = this.lobes.buildFor(sim, beams, {
-        hitRadius, labelOffset, lobeFloor, hoverSegRadius, selectedNodeIx, focused,
+        hitRadius, labelOffset, lobeFloor, selectedNodeIx, focused,
       });
       for (const m of r.meshes) this.content.add(m);
       this.pickables.push(...r.pickables);
@@ -133,7 +135,7 @@ export class Scene {
     // default mesh.scale = 1 (konpeito at 1mm, etc.). Canvas-side pointerdown
     // kicks the rAF loop and hides this; label-click clearly exposes it
     // because nothing else triggers a re-render.
-    this.lobes.apply(computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf));
+    this.applyLobesAndSticks();
     this.refresh();
   }
 
@@ -141,21 +143,21 @@ export class Scene {
     if (this.lobes.setTarget(target)) this.startAnim();
   }
 
-  // Show / hide hover segments. Pessimistic decomposition has independent
+  // Show / hide contribution sticks. Pessimistic decomposition has independent
   // (query, beam, mode) rank-1 contributions, so a single cell hover may
-  // emit one segment per query × one mode = N_queries segments; a per-beam
-  // total hover emits N_queries × 5 segments. apply() runs once so the
-  // fresh meshes pick up the live δ-exag immediately.
-  setHoverSegment(segs: HoverSegment[] | null): void {
-    const kick = this.lobes.setHover(segs);
+  // emit one stick per query × one mode = N_queries sticks; a per-beam total
+  // hover emits N_queries × 5 sticks. apply() runs once so the fresh meshes
+  // pick up the live δ-exag immediately.
+  setSticks(sticks: Stick[] | null): void {
+    const kick = this.sticks.setSticks(sticks);
     // Floating δ-labels (DOM, in front of canvas) would otherwise cover the
     // contribution stick; cross-fade them out while it's on screen. CSS owns
     // the label transition, so toggling the class once is enough.
-    this.labels.setFaded(!!segs && segs.length > 0);
-    // apply() is mandatory after setHover whenever geometry was rebuilt — fresh
-    // cylinders ship at mesh.scale = (1,1,1) (length = 1 mm), so without it
-    // cell-to-cell hovers flash a too-small stick until something else ticks.
-    this.lobes.apply(computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf));
+    this.labels.setFaded(!!sticks && sticks.length > 0);
+    // apply() is mandatory after setSticks whenever geometry was rebuilt —
+    // fresh cylinders ship at mesh.scale = (1,1,1) (length = 1 mm), so without
+    // it cell-to-cell hovers flash a too-small stick until something else ticks.
+    this.applyLobesAndSticks();
     if (kick) this.startAnim();
     else this.refresh();
   }
@@ -239,8 +241,8 @@ export class Scene {
       }
 
       const scaleSettled = this.lobes.tickScale(dt);
-      const hoverSettled = this.lobes.tickHoverFade(dt);
-      this.lobes.apply(computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf));
+      const stickSettled = this.sticks.tickFade(dt);
+      this.applyLobesAndSticks();
 
       this.refresh();
 
@@ -248,7 +250,7 @@ export class Scene {
         && this.yawVelocity === 0
         && Math.abs(this.targetYaw - this.yaw) < 1e-4
         && scaleSettled
-        && hoverSettled;
+        && stickSettled;
       if (settled) {
         this.animHandle = 0;
         return;
@@ -256,6 +258,15 @@ export class Scene {
       this.animHandle = requestAnimationFrame(tick);
     };
     this.animHandle = requestAnimationFrame(tick);
+  }
+
+  // Lobes and sticks share the canvas-derived ceiling and the animated δ-exag,
+  // and always need to be applied together (sticks read scale via the lobe's
+  // getDisplayScale()). Wrapping keeps every call site in lockstep.
+  private applyLobesAndSticks() {
+    const ceil = computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf);
+    this.lobes.apply(ceil);
+    this.sticks.apply(this.lobes.getDisplayScale(), ceil);
   }
 
   private refresh() {

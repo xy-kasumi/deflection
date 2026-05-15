@@ -169,7 +169,6 @@ export interface LobeBuildOpts {
   hitRadius: number;
   labelOffset: number;
   lobeFloor: number;
-  hoverSegRadius: number;
   selectedNodeIx: number;
   focused: boolean;
 }
@@ -187,18 +186,6 @@ export interface LobeBuildResult {
   labels: LobeLabelSpec[];
 }
 
-// One straight segment anchored at a query node, oriented along the unit
-// argmax direction d* of a single (beam, mode) part, half-length δ_{b,m} (mm)
-// at unit δ-exag. The rank-1 contribution |M·d| is symmetric in d, so the
-// renderer draws ±vector_mm from origin — the segment crosses the node and
-// pokes out the antipode of the lobe. The renderer scales it with the live
-// δ-exag and clamps each tip at lobeCeilWorld so it never shoots off-screen.
-export interface HoverSegment {
-  origin_mm: Vec3;
-  /** d* · δ_{b,m} — half-vector; the segment extends ±this from origin at unit δ-exag. */
-  vector_mm: Vec3;
-}
-
 export class LobeRenderer {
   private lobeAnims: LobeAnim[] = [];
   private lobeFloor = 0;
@@ -210,30 +197,14 @@ export class LobeRenderer {
   // program acquisition for the user-defined shader.
   private normalMatPool: THREE.ShaderMaterial[] = [];
 
-  // Hover-segment overlay. Lives in a group the Scene parents directly to its
-  // root (outside `content`) so it survives chain/lobe rebuilds. The material
-  // is reused across hover changes to keep THREE's program cache warm. Each
-  // child cylinder carries its unscaled mm half-length in `userData.dist_mm`
-  // so apply() can clamp it individually against lobeCeilWorld; the cross-
-  // section is fixed in world units (set on buildFor from chain's `u`) so
-  // δ-exag scales length without fattening the stick.
-  //
-  // hoverFade_target/anim drives an opacity transition on hoverMat: setHover
-  // flips the target, the anim loop eases hoverFade_anim toward it, and the
-  // children are disposed only after the fade-out has fully completed (so the
-  // sticks don't snap out before the user's eye has tracked them away).
-  private hoverGroup = new THREE.Group();
-  private hoverMat = new THREE.MeshBasicMaterial({
-    color: COLOR.deformed,
-    transparent: true,
-    opacity: 0,
-  });
-  private hoverSegRadius = 0;
-  private hoverFade_target = 0;
-  private hoverFade_anim = 0;
-
   getTarget(): number {
     return this.displayScale_target;
+  }
+
+  // Animated δ-exag — shared with StickRenderer so sticks scale in lockstep
+  // with the lobe they decompose.
+  getDisplayScale(): number {
+    return this.displayScale_anim;
   }
 
   // Returns true if the target changed (caller may want to kick the anim
@@ -264,7 +235,6 @@ export class LobeRenderer {
   buildFor(sim: SimResult, beams: BeamNode[], opts: LobeBuildOpts): LobeBuildResult {
     this.lobeAnims = [];
     this.lobeFloor = opts.lobeFloor;
-    this.hoverSegRadius = opts.hoverSegRadius;
 
     const meshes: THREE.Object3D[] = [];
     const pickables: THREE.Mesh[] = [];
@@ -340,78 +310,6 @@ export class LobeRenderer {
     this.lobeAnims = [];
   }
 
-  getHoverGroup(): THREE.Group {
-    return this.hoverGroup;
-  }
-
-  // Set the hover-segment intent. Geometry is rebuilt eagerly when segs is
-  // non-empty so the next tick already has the right sticks to fade in; on
-  // null/empty, the existing children are kept until the fade-out finishes,
-  // so the user sees them ease away instead of snap. Returns true if the
-  // animation loop should be kicked.
-  setHover(segs: HoverSegment[] | null): boolean {
-    if (segs && segs.length > 0) {
-      this.rebuildHoverChildren(segs);
-      const changed = this.hoverFade_target !== 1 || this.hoverFade_anim !== 1;
-      this.hoverFade_target = 1;
-      return changed;
-    }
-    const changed = this.hoverFade_target !== 0 || this.hoverFade_anim !== 0;
-    this.hoverFade_target = 0;
-    return changed;
-  }
-
-  // Cylinder per HoverSegment, oriented local-Y = d* so apply() can scale only
-  // mesh.scale.y without inflating the cross-section. Clamp uses |v| (one-side
-  // length); both tips stay inside the konpeito ceiling.
-  private rebuildHoverChildren(segs: HoverSegment[]): void {
-    this.disposeHoverChildren();
-    const r = this.hoverSegRadius;
-    const yAxis = new THREE.Vector3(0, 1, 0);
-    for (const seg of segs) {
-      const v = seg.vector_mm;
-      const dist = Math.hypot(v[0], v[1], v[2]);
-      if (dist === 0) continue;
-      // Unit-length cylinder along local Y; apply() scales Y to 2·dist·δ-exag.
-      const geom = new THREE.CylinderGeometry(r, r, 1, 12);
-      const mesh = new THREE.Mesh(geom, this.hoverMat);
-      mesh.quaternion.setFromUnitVectors(
-        yAxis,
-        new THREE.Vector3(v[0] / dist, v[1] / dist, v[2] / dist),
-      );
-      mesh.position.set(seg.origin_mm[0], seg.origin_mm[1], seg.origin_mm[2]);
-      mesh.userData['dist_mm'] = dist;
-      this.hoverGroup.add(mesh);
-    }
-  }
-
-  private disposeHoverChildren(): void {
-    for (const child of this.hoverGroup.children) {
-      const o = child as THREE.Object3D & { geometry?: THREE.BufferGeometry };
-      o.geometry?.dispose();
-    }
-    this.hoverGroup.clear();
-  }
-
-  // Ease hoverFade_anim toward target; dispose children once a fade-out has
-  // fully settled. Returns true when the fade is settled (no further frames
-  // needed). Counterpart to tickScale for the anim loop's settled check.
-  tickHoverFade(dt: number): boolean {
-    const tgt = this.hoverFade_target;
-    const cur = this.hoverFade_anim;
-    if (cur === tgt) return true;
-    const alpha = 1 - Math.exp(-dt * MOTION.hoverFadeK);
-    let next = cur + (tgt - cur) * alpha;
-    if (Math.abs(next - tgt) < MOTION.hoverFadeSettle) next = tgt;
-    this.hoverFade_anim = next;
-    if (next === 0 && tgt === 0) this.disposeHoverChildren();
-    return next === tgt;
-  }
-
-  getHoverFade(): number {
-    return this.hoverFade_anim;
-  }
-
   // Log-space ease toward the target δ-exag. Geometric steps (×1→×10→×100)
   // feel like a uniform "zoom rate" instead of an exponential blast. Returns
   // true if the animation has settled this tick.
@@ -429,24 +327,10 @@ export class LobeRenderer {
     return true;
   }
 
-  // Per-frame crossfade between underflow / normal / overflow, plus hover-line
-  // scaling. lobeCeilWorld is computed externally so this class doesn't need
-  // to know about the canvas.
+  // Per-frame crossfade between underflow / normal / overflow. lobeCeilWorld
+  // is computed externally so this class doesn't need to know about the canvas.
   apply(lobeCeilWorld: number): void {
     const scale = this.displayScale_anim;
-
-    // Hover sticks: same δ-exag as the lobes, each clamped at lobeCeilWorld so
-    // a big mode at a high exag setting can't shoot past the konpeito. Clamp
-    // is per-tip (dist is half-length), and only the length axis scales — the
-    // cross-section radius is baked into the geometry in world units.
-    this.hoverMat.opacity = this.hoverFade_anim;
-    for (const child of this.hoverGroup.children) {
-      const dist = child.userData['dist_mm'] as number | undefined;
-      if (!dist || dist <= 0) continue;
-      const s = Math.min(scale, lobeCeilWorld / dist);
-      child.scale.set(1, 2 * dist * s, 1);
-    }
-
     if (this.lobeAnims.length === 0) return;
     const floor = this.lobeFloor;
     // User's mental model is discrete: {underflow, normal, overflow}. The

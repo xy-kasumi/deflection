@@ -309,7 +309,7 @@ html, body {
   cursor: pointer;
   user-select: none;
   /* Cross-fade with the contribution stick (see .scene-labels.faded). Matches
-     MOTION.hoverFadeK ≈ 180ms total in tokens.ts. */
+     MOTION.stickFadeK ≈ 180ms total in tokens.ts. */
   transition: opacity 0.18s ease;
 }
 

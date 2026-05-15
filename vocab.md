@@ -9,8 +9,9 @@ Names for concepts that span code, UI, and conversation. If new behavior doesn't
 - **query node** — a point whose deflection we report.
 - **tip** — point on a chain which is natural "end" of the chain. Usually end of last beam; exception: mid of root beam when there's only one beam and `support(both)`.
 - **directional** — scalar defined over unit sphere surface. used for representing deflection.
-- **lobe** — 3D visualization of a directional.
-- **contribution** — decomposition of deflection.
-- **breakdown** — the per-load / per-beam contribution decomposition of deflection.
+- **lobe** — 3D visualization of a directional deflection.
+- **breakdown** — whole UI pane that handles decomposition of deflection.
+- **contribution** — individual part of breakdown (deflection decomposition).
+- **stick** — 3D visualization of contribution(s) as sticks
 - **current beam** — the beam-def the editor cursor is in.
 - **visual unit** — basis of 3D view object sizing where 1u is still visible. 1u = rod diameter.

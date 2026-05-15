@@ -11,7 +11,7 @@ type LengthUnit = 'mm' | 'µm';
 
 // Cursor over a breakdown cell. `keys` is one entry for a single (beam, mode)
 // cell, or all five modes for a per-beam total cell. The scene draws one
-// segment per query node per key.
+// stick per query node per key.
 export interface HoverHandlers {
   enter: (keys: Array<{ beamIx: number; mode: Mode }>) => void;
   leave: () => void;
