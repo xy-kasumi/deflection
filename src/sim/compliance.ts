@@ -212,9 +212,9 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
           const F_local = matVec(RT, F_world);
           const M_local = matVec(RT, M_world);
 
-          const to = modeTorsion(M_local, L_seg, L_seg, s.material.G_MPa, s.section.J_mm4);
-          const bx = modeBendIx(F_local, M_local, L_seg, L_seg, s.material.E_MPa, s.section.Ix_mm4);
-          const by = modeBendIy(F_local, M_local, L_seg, L_seg, s.material.E_MPa, s.section.Iy_mm4);
+          const to = modeTorsion(M_local, L_seg, s.material.G_MPa, s.section.J_mm4);
+          const bx = modeBendIx(F_local, M_local, L_seg, s.material.E_MPa, s.section.Ix_mm4);
+          const by = modeBendIy(F_local, M_local, L_seg, s.material.E_MPa, s.section.Iy_mm4);
 
           setMatCol(eTwist,       j, transportOnly(R, to.rot, armToQuery));
           setMatCol(eBendIxTrans, j, translationOnly(R, bx.defl));
@@ -560,10 +560,11 @@ function solve4x3(A: number[], B: number[]): number[] | null {
 // (along beam). Section Ix = ∫y² dA (about beam-X) → resists deflection in
 // beam-Y; Iy = ∫x² dA (about beam-Y) → resists deflection in beam-X.
 //
-// Cantilever along +Z (fixed at base z=0), point load at offset s_load with
-// local-frame force F = (F_x, F_y, F_z) and moment M = (M_x, M_y, M_z).
-// Returned `defl` and `rot` are at offset s_eval, in beam-local frame.
-// Modes are decoupled in Euler-Bernoulli with small deflection.
+// Cantilever of length L along +Z (fixed at base z=0), tip-applied (F, M) in
+// beam-local frame with RHR moments. Returned `defl` and `rot` are at the
+// tip (s = L). The segment walker places every load and query at a node, so
+// the cantilever's "load" and "eval" both sit at the tip — no interior-s
+// formula needed.
 //
 // Axial extension/compression is not modeled — see README scope notes.
 // Chord-aligned forces produce no deflection contribution; the beam is
@@ -572,21 +573,13 @@ function solve4x3(A: number[], B: number[]): number[] | null {
 interface ModeOut { defl: Vec3; rot: Vec3 }
 const ZERO: ModeOut = { defl: [0, 0, 0], rot: [0, 0, 0] };
 
-function modeTorsion(M: Vec3, s_load: number, s_eval: number, G_MPa: number, J_mm4: number): ModeOut {
+function modeTorsion(M: Vec3, L: number, G_MPa: number, J_mm4: number): ModeOut {
   if (J_mm4 <= 0 || G_MPa <= 0) return ZERO;
-  // θ_z(s) = M_z · min(s, s_load) / (G·J). No deflection at s_eval from
-  // torsion alone (rotation propagates as transport for downstream points).
-  const theta_z = M[2] * Math.min(s_eval, s_load) / (G_MPa * J_mm4);
-  return { defl: [0, 0, 0], rot: [0, 0, theta_z] };
+  // θ_z(L) = M_z · L / (G·J). Pure torsion has no deflection contribution.
+  return { defl: [0, 0, 0], rot: [0, 0, M[2] * L / (G_MPa * J_mm4)] };
 }
 
-// Shared Euler-Bernoulli cantilever kernel for the two bending modes.
-//
-// In-plane bending of a cantilever along +Z (fixed at s=0). One bending plane
-// per call: choose `F_perp` and `M_about` as the in-plane projections of the
-// applied (F, M), both in the right-hand-rule convention. Returns
-// (u_perp, rot_about) at s_eval given a tip-style (force + moment) load at
-// s_load — both with zero BCs at the base.
+// Shared Euler-Bernoulli cantilever-tip kernel for the two bending modes.
 //
 // `sigma` ties signs to (axis_perp, axis_about, axial) chirality, governing
 // two relations at once:
@@ -602,31 +595,22 @@ function modeTorsion(M: Vec3, s_load: number, s_eval: number, G_MPa: number, J_m
 //      the same chirality.
 function modeBend(
   F_perp: number, M_about: number,
-  s_load: number, s_eval: number, EI: number, sigma: -1 | 1,
+  L: number, EI: number, sigma: -1 | 1,
 ): { u_perp: number; rot_about: number } {
-  let u_perp: number;
-  let du_ds: number;
-  if (s_eval <= s_load) {
-    u_perp = (F_perp * s_eval * s_eval * (3 * s_load - s_eval) / 6 + sigma * M_about * s_eval * s_eval / 2) / EI;
-    du_ds  = (F_perp * s_eval * (s_load - s_eval / 2)              + sigma * M_about * s_eval)              / EI;
-  } else {
-    const u_at  = (F_perp * s_load * s_load * s_load / 3 + sigma * M_about * s_load * s_load / 2) / EI;
-    const du_at = (F_perp * s_load * s_load / 2          + sigma * M_about * s_load)              / EI;
-    u_perp = u_at + du_at * (s_eval - s_load);
-    du_ds  = du_at;
-  }
+  const u_perp = (F_perp * L * L * L / 3 + sigma * M_about * L * L / 2) / EI;
+  const du_ds  = (F_perp * L * L     / 2 + sigma * M_about * L)         / EI;
   return { u_perp, rot_about: sigma * du_ds };
 }
 
-function modeBendIx(F: Vec3, M: Vec3, s_load: number, s_eval: number, E_MPa: number, Ix_mm4: number): ModeOut {
+function modeBendIx(F: Vec3, M: Vec3, L: number, E_MPa: number, Ix_mm4: number): ModeOut {
   if (Ix_mm4 <= 0 || E_MPa <= 0) return ZERO;
-  const r = modeBend(F[1], M[0], s_load, s_eval, E_MPa * Ix_mm4, -1);
+  const r = modeBend(F[1], M[0], L, E_MPa * Ix_mm4, -1);
   return { defl: [0, r.u_perp, 0], rot: [r.rot_about, 0, 0] };
 }
 
-function modeBendIy(F: Vec3, M: Vec3, s_load: number, s_eval: number, E_MPa: number, Iy_mm4: number): ModeOut {
+function modeBendIy(F: Vec3, M: Vec3, L: number, E_MPa: number, Iy_mm4: number): ModeOut {
   if (Iy_mm4 <= 0 || E_MPa <= 0) return ZERO;
-  const r = modeBend(F[0], M[1], s_load, s_eval, E_MPa * Iy_mm4, +1);
+  const r = modeBend(F[0], M[1], L, E_MPa * Iy_mm4, +1);
   return { defl: [r.u_perp, 0, 0], rot: [0, r.rot_about, 0] };
 }
 
