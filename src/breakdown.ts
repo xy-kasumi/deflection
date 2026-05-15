@@ -5,6 +5,10 @@ import type { LoadProvenance } from './loadsystem';
 
 export type DecompFormat = 'pct' | 'abs';
 
+// Length unit auto-picked per breakdown to keep numbers in the "1.2 … 123"
+// range. Sub-mm totals would otherwise render with leading-zero noise.
+type LengthUnit = 'mm' | 'µm';
+
 // Cursor over a breakdown cell. `keys` is one entry for a single (beam, mode)
 // cell, or all five modes for a per-beam total cell. The scene draws one
 // segment per query node per key.
@@ -102,17 +106,21 @@ export function renderBreakdown(
 
   const rows = decompose(sel);
 
+  // The section's unit is picked from the pessimistic total — drops to µm
+  // when even the budget is sub-mm so cells don't read as "0.0012 …".
+  const unit: LengthUnit = rows.deltaMax >= 1 ? 'mm' : 'µm';
+
   // Decomposition section header + pessimistic total + format toggle.
   const decompHeader = document.createElement('div');
   decompHeader.className = 'bd-section bd-section-toolbar';
   const decompTitle = document.createElement('span');
-  decompTitle.append(`decomposition of δ (tot ≲ ${formatMm(rows.deltaMax)}) `);
+  decompTitle.append(`decomposition of δ (tot ≲ ${formatLen(rows.deltaMax, unit)}) `);
   const help = document.createElement('span');
   help.className = 'bd-help';
   help.textContent = '?';
   help.title = 'Pessimistic upper bound. (Worst case per beam/mode, summed.)';
   decompTitle.appendChild(help);
-  decompHeader.append(decompTitle, formatToggle(format, onFormatChange));
+  decompHeader.append(decompTitle, formatToggle(format, unit, onFormatChange));
   el.appendChild(decompHeader);
 
   // Beams grid. Five sub-mode columns + total. Each sub-mode cell is one
@@ -147,7 +155,10 @@ export function renderBreakdown(
         b.twist,
       ];
       modeValues.forEach((val, i) => {
-        const cell = valueCell(val, rows.deltaMax, format, intensityOf(val, subModeMax));
+        const cell = valueCell(
+          fmtBeamCell(val, rows.deltaMax, format, unit),
+          intensityOf(val, subModeMax),
+        );
         if (hover) {
           const m = MODE_COLUMNS[i]!;
           cell.classList.add('hoverable');
@@ -158,7 +169,9 @@ export function renderBreakdown(
       });
 
       const totalCell = valueCell(
-        b.total, rows.deltaMax, format, intensityOf(b.total, totalsMax), true,
+        fmtBeamCell(b.total, rows.deltaMax, format, unit),
+        intensityOf(b.total, totalsMax),
+        true,
       );
       if (hover) {
         totalCell.classList.add('hoverable');
@@ -188,7 +201,8 @@ export function renderBreakdown(
       force.className = 'force';
       force.textContent = formatLoad(load?.Fmax_N ?? 0);
       const value = valueCell(
-        r.delta_mm, rows.deltaMax, format, intensityOf(r.delta_mm, loadsMax),
+        fmtLoadCell(r.delta_mm, rows.deltaMax, format, unit),
+        intensityOf(r.delta_mm, loadsMax),
       );
       grid.append(loc, force, value);
     }
@@ -238,20 +252,29 @@ function headerCell(text: string, title?: string): HTMLElement {
 
 // `intensity` ∈ [0, 1] from the caller; opacity floors at 0.2 so 0-value
 // cells stay legible while max-value cells read at full strength.
-function valueCell(
-  value_mm: number,
-  total_mm: number,
-  format: DecompFormat,
-  intensity: number,
-  isTotal = false,
-): HTMLElement {
+function valueCell(text: string, intensity: number, isTotal = false): HTMLElement {
   const cell = document.createElement('span');
   cell.className = isTotal ? 'frac total' : 'frac';
-  cell.textContent = format === 'pct'
-    ? formatPct(fractionOf(value_mm, total_mm))
-    : formatMm(value_mm);
+  cell.textContent = text;
   cell.style.opacity = String(0.2 + 0.8 * clamp01(intensity));
   return cell;
+}
+
+// Beam cells: bare number, since the toggle button advertises the unit and
+// every cell in the grid shares it.
+function fmtBeamCell(value_mm: number, total_mm: number, format: DecompFormat, unit: LengthUnit): string {
+  return format === 'pct'
+    ? formatPct(fractionOf(value_mm, total_mm))
+    : formatNum(value_mm, unit);
+}
+
+// Load cells: keep the unit suffix. Loads rows mix kinds (force in N, then a
+// length) and the explicit "mm"/"µm" prevents the value from looking like a
+// dimensionless companion to the N.
+function fmtLoadCell(value_mm: number, total_mm: number, format: DecompFormat, unit: LengthUnit): string {
+  return format === 'pct'
+    ? formatPct(fractionOf(value_mm, total_mm))
+    : formatLen(value_mm, unit);
 }
 
 function intensityOf(value: number, max: number): number {
@@ -262,12 +285,16 @@ function clamp01(x: number): number {
   return Math.max(0, Math.min(1, x));
 }
 
-function formatToggle(current: DecompFormat, onChange: (next: DecompFormat) => void): HTMLElement {
+function formatToggle(
+  current: DecompFormat,
+  unit: LengthUnit,
+  onChange: (next: DecompFormat) => void,
+): HTMLElement {
   const wrap = document.createElement('span');
   wrap.className = 'bd-fmt-toggle';
   const opts: { val: DecompFormat; label: string }[] = [
     { val: 'pct', label: '%' },
-    { val: 'abs', label: 'abs' },
+    { val: 'abs', label: unit },
   ];
   for (const o of opts) {
     const btn = document.createElement('button');
@@ -338,6 +365,21 @@ export function formatMm(v: number): string {
   return decimals > 0
     ? `${rounded.toFixed(decimals)} mm`
     : `${rounded} mm`;
+}
+
+// Bare number, scaled to the section's unit.
+function formatNum(v_mm: number, unit: LengthUnit): string {
+  const v = unit === 'mm' ? v_mm : v_mm * 1000;
+  if (v === 0) return '0';
+  const a = Math.abs(v);
+  const exp = Math.floor(Math.log10(a));
+  if (exp < -4) return v.toExponential(1);
+  const decimals = Math.max(0, 1 - exp);
+  return v.toFixed(decimals);
+}
+
+function formatLen(v_mm: number, unit: LengthUnit): string {
+  return `${formatNum(v_mm, unit)} ${unit}`;
 }
 
 // Linearized rotation in degrees with 2 significant figures. The underlying
