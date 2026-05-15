@@ -5,8 +5,8 @@
 
 import type { Beam, Problem, Vec3 } from '../src/sim/problem';
 import { buildCompliances } from '../src/sim/compliance';
-import { decompose } from '../src/sim/decompose';
 import { simulate } from '../src/sim/simulate';
+import type { Mode } from '../src/sim/compliance';
 
 const STEEL = { E_MPa: 200_000, G_MPa: 79_000 };
 const KGF_TO_N = 9.80665;
@@ -118,33 +118,51 @@ function singleCantilever(): Problem {
     const expBend = (KGF_TO_N * L ** 3) / (3 * EIx);
     check('δ(+y) = F·L³/(3·E·Ix)', q.deflection_mm.at([0, 1, 0]), expBend);
     checkNear0('δ(+x) = 0 (axially rigid)', q.deflection_mm.at([1, 0, 0]));
-    const { dir, value } = q.deflection_mm.max();
+    const { dir_unit, value } = q.deflection_mm.max();
     check('δ_max = F·L³/(3·E·Ix)', value, expBend);
-    expect('d* lies in the YZ plane (chord is rigid)', Math.abs(dir[0]) < 1e-3);
-    check('Σ load contributions = δ_max', q.loads.reduce((s, l) => s + l.delta_mm, 0), value, 1e-9);
-    check('Σ beam contributions = δ_max', q.beams.reduce((s, b) => s + b.delta_mm, 0), value, 1e-9);
+    expect('d* lies in the YZ plane (chord is rigid)', Math.abs(dir_unit[0]) < 1e-3);
+
+    // δ_max decomposition invariants. At a single direction d*, summing the
+    // single-load Directionals over all (b, m, p) must reproduce δ(d*) =
+    // δ_max exactly (linear support function in F).
+    let perBeamSum = 0, perLoadSum = 0;
+    const perLoad = new Map<number, number>();
+    for (const b of q.beamDeflections) {
+      let bsum = 0;
+      for (const bm of b.byMode) {
+        for (const pl of bm.perLoad) {
+          const v = pl.deflection_mm.at(dir_unit);
+          bsum += v;
+          perLoad.set(pl.loadIx, (perLoad.get(pl.loadIx) ?? 0) + v);
+        }
+      }
+      perBeamSum += bsum;
+    }
+    for (const v of perLoad.values()) perLoadSum += v;
+    check('Σ_(b,m,p) F·|C^T d*| = δ_max (by beam)', perBeamSum, value, 1e-9);
+    check('Σ_(b,m,p) F·|C^T d*| = δ_max (by load)', perLoadSum, value, 1e-9);
   }
 }
 
-// ---- Test 4: decompose at an explicit d=+y — pure bendIx ----
+// ---- Test 4: per-mode δ at d=+y — pure bendIxTrans on the load beam ----
 {
-  console.log('\n-- Test 4: decompose at d=+y --');
-  const c = buildCompliances(singleCantilever());
-  if ('kind' in c) {
-    expect('buildCompliances ok', false);
+  console.log('\n-- Test 4: per-mode δ at d=+y --');
+  const out = simulate(singleCantilever());
+  if (out.kind !== 'ok') {
+    expect('simulate ok', false);
   } else {
-    const dec = decompose(c, 0, [0, 1, 0]);
-    expect('1 load contribution', dec.perLoad.length === 1);
-    expect('1 beam contribution', dec.perBeam.length === 1);
-    if (dec.perLoad.length === 1) {
-      check('load0 delta = F·L³/(3·E·Ix)', dec.perLoad[0]!.delta_mm, (KGF_TO_N * L ** 3) / (3 * EIx));
-    }
-    if (dec.perBeam.length === 1) {
-      const b = dec.perBeam[0]!;
-      check('beam0 total = bendIx (pure bend at d=+y)', b.total_mm, b.bendIx_mm);
-      checkNear0('beam0 bendIy = 0', b.bendIy_mm);
-      checkNear0('beam0 torsion = 0', b.torsionJ_mm);
-    }
+    const q = out.queryResults[0]!;
+    expect('1 beam in beamDeflections', q.beamDeflections.length === 1);
+    const b = q.beamDeflections[0]!;
+    const at_y = (m: Mode): number =>
+      b.byMode.find((x) => x.mode === m)?.deflection_mm.at([0, 1, 0]) ?? 0;
+    const expBend = (KGF_TO_N * L ** 3) / (3 * EIx);
+    check('bendIxTrans @ d=+y = F·L³/(3·E·Ix)', at_y('bendIxTrans'), expBend);
+    checkNear0('bendIyTrans @ d=+y = 0', at_y('bendIyTrans'));
+    // *Rot modes and twist are zero on-beam: arm = 0 ⇒ no transport.
+    checkNear0('bendIxRot @ d=+y = 0', at_y('bendIxRot'));
+    checkNear0('bendIyRot @ d=+y = 0', at_y('bendIyRot'));
+    checkNear0('twist @ d=+y = 0', at_y('twist'));
   }
 }
 

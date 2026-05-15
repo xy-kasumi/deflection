@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
-import { delta, type Directional, type DeltaTerm } from '../sim/directional';
+import { delta, capTermsForUniform, type Directional } from '../sim/directional';
 import { formatMm } from '../breakdown';
 import { COLOR, MOTION, hexToVec3 } from './tokens';
 
@@ -259,7 +259,7 @@ export class LobeRenderer {
       const isSel = ix === opts.selectedNodeIx;
       const worldPos = new THREE.Vector3(...n.pos_mm);
 
-      const lobeDir = n.deflection;
+      const lobeDir = n.deflection_mm;
       const delta_max_mm = lobeDir.max().value;
 
       // All three states are built up-front. The per-frame tick scales/fades
@@ -456,7 +456,7 @@ export function computeLobeCeilWorld(canvas: HTMLCanvasElement, scaleHalf: numbe
 // cap painting and the lobe renders as a uniform shell — same affordance as
 // the underflow sphere, just at the lobe's natural size.
 function buildNormalLobe(dir: Directional, reuseMat?: THREE.ShaderMaterial): THREE.Mesh {
-  const terms = dir.termsForGpuCompute(MAX_LOADS);
+  const terms = capTermsForUniform(dir.terms, MAX_LOADS);
   const nLoads = Math.min(terms.length, MAX_LOADS);
   const dMax = dir.max().value;
   const dMaxInv = dMax > 0 ? 1 / dMax : 0;
@@ -494,7 +494,7 @@ function buildNormalLobe(dir: Directional, reuseMat?: THREE.ShaderMaterial): THR
       if (i < nLoads) {
         const M = terms[i]!.N;
         NsArr[i]!.set(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7], M[8]);
-        FsArr[i] = terms[i]!.F;
+        FsArr[i] = terms[i]!.F_N;
       } else {
         NsArr[i]!.identity();
         FsArr[i] = 0;
@@ -511,7 +511,7 @@ function buildNormalLobe(dir: Directional, reuseMat?: THREE.ShaderMaterial): THR
       if (i < nLoads) {
         const M = terms[i]!.N;
         m.set(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7], M[8]);
-        FsUniform.push(terms[i]!.F);
+        FsUniform.push(terms[i]!.F_N);
       } else {
         m.identity();
         FsUniform.push(0);

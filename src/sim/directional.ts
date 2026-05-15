@@ -4,37 +4,44 @@ import type { BeamDeflection } from './simulate';
 
 // Directional distribution at a query node q:
 //
-//   δ_q(d)  :=  Σ_p F_max_p · | C_tot[q][p]ᵀ · d |       (units: mm)
+//   δ_q(d)  :=  Σ_p F_max_p · | C_tot[q][p]ᵀ · d |
 //
 // d is a world-frame unit vector. δ_q is convex, positively-homogeneous-1 in d,
 // and is the support function of the Minkowski sum of ellipsoids
 // { F_max_p · C_tot[q][p]ᵀ · u : |u| ≤ 1 }.
+//
+// Directional is unit-agnostic at the math-object level: scalar outputs
+// (`at(d)`, `max().value`, `sample(...).value`) come back in whatever unit
+// the host field declares (e.g. `deflection_mm` → mm, `rotation_rad` → rad).
 //
 // `at` evaluates δ(d) at a given d. `max` finds (d*, δ(d*)) by gradient-power
 // iteration on the support-function gradient — exact to machine precision in a
 // handful of iterations for any reasonable problem. `sample` returns a
 // quasi-uniform grid on S² for visualization.
 
-export interface DirectionalSample { dir: Vec3; value: number; }
+export interface DirectionalSample {
+  dir_unit: Vec3;
+  /** δ(dir_unit); unit inherited from the host Directional. */
+  value: number;
+}
 
 /**
- * One {N, F} pair in the sum δ(d) = Σ F·|N·d|. The Minkowski sum interpretation
- * from the file header: each term is a load's contribution as an ellipsoid
- * support function.
+ * One {N, F} pair in the sum δ(d) = Σ F·|N·d|. Each term is the support
+ * function of a load's response ellipsoid (see file header). N's unit is
+ * polymorphic per host (mm/N for translation Directionals, rad/N for
+ * rotation); F is the load magnitude in Newtons.
  */
-export interface DeltaTerm { N: Mat3; F: number; }
+export interface DeltaTerm { N: Mat3; F_N: number; }
 
 export interface Directional {
+  /** The {N, F_N} terms whose Σ F_N·|N·d| this Directional evaluates. */
+  readonly terms: readonly DeltaTerm[];
+  /** δ at `dir`; auto-normalizes. Unit inherited from the host field. */
   at(dir: Vec3): number;
-  max(): { dir: Vec3; value: number };
+  /** Argmax direction and δ(d*); value in host's unit. */
+  max(): { dir_unit: Vec3; value: number };
+  /** Quasi-uniform sphere sample of δ; values in host's unit. */
   sample(nDirs: number): DirectionalSample[];
-  /**
-   * Terms for GPU evaluation, at most `maxTerms`. When the true term count
-   * exceeds the cap the smallest terms are folded into a single residue term
-   * — an N=identity term, since |I·d| = 1 — that upper-bounds them. So the
-   * GPU sees a slight over-estimate; `at`/`max`/`sample` stay exact.
-   */
-  termsForGpuCompute(maxTerms: number): readonly DeltaTerm[];
 }
 
 /**
@@ -45,9 +52,9 @@ export interface Directional {
  */
 export function delta(d_unit: Vec3, terms: readonly DeltaTerm[]): number {
   let s = 0;
-  for (const { N, F } of terms) {
+  for (const { N, F_N } of terms) {
     const v = matVec(N, d_unit);
-    s += F * Math.hypot(v[0], v[1], v[2]);
+    s += F_N * Math.hypot(v[0], v[1], v[2]);
   }
   return s;
 }
@@ -57,7 +64,7 @@ export function directionalFor(c: Compliances, queryIx: number): Directional {
   const ts: DeltaTerm[] = [];
   for (const t of c.totals) {
     if (t.queryIx !== queryIx) continue;
-    ts.push({ N: transpose(t.C), F: c.loadFmax_N[t.loadIx] ?? 0 });
+    ts.push({ N: transpose(t.C), F_N: c.loadFmax_N[t.loadIx] ?? 0 });
   }
   return makeDirectional(ts);
 }
@@ -72,44 +79,40 @@ export function rotationFor(c: Compliances, queryIx: number): Directional {
   const ts: DeltaTerm[] = [];
   for (const t of c.rotationTotals) {
     if (t.queryIx !== queryIx) continue;
-    ts.push({ N: transpose(t.C), F: c.loadFmax_N[t.loadIx] ?? 0 });
+    ts.push({ N: transpose(t.C), F_N: c.loadFmax_N[t.loadIx] ?? 0 });
   }
   return makeDirectional(ts);
 }
 
 /**
- * δ restricted to each beam's compliance in isolation — each beam worst-cased
- * independently. These do NOT sum to the whole-structure Directional
- * (Σ ≥ δ, triangle inequality); each is honest only on its own.
+ * δ restricted to each (beam, mode) sub-compliance, worst-cased independently.
+ * These do NOT sum to the whole-structure δ (Σ ≥ δ, triangle inequality);
+ * each is honest only on its own. Per-mode `perLoad` keeps single-load
+ * Directionals so callers can attribute the (b, m) argmax back to loads.
  */
 export function beamDirectionals(c: Compliances, queryIx: number): BeamDeflection[] {
-  const byBeam = new Map<number, {
-    total: Map<number, Mat3>;
-    perMode: Map<Mode, Map<number, Mat3>>;
-  }>();
+  const byBeam = new Map<number, Map<Mode, Map<number, Mat3>>>();
   for (const e of c.entries) {
     if (e.queryIx !== queryIx) continue;
-    let b = byBeam.get(e.beamIx);
-    if (!b) { b = { total: new Map(), perMode: new Map() }; byBeam.set(e.beamIx, b); }
-    accumMat(b.total, e.loadIx, e.C);
-    let pm = b.perMode.get(e.mode);
-    if (!pm) { pm = new Map(); b.perMode.set(e.mode, pm); }
+    let perMode = byBeam.get(e.beamIx);
+    if (!perMode) { perMode = new Map(); byBeam.set(e.beamIx, perMode); }
+    let pm = perMode.get(e.mode);
+    if (!pm) { pm = new Map(); perMode.set(e.mode, pm); }
     accumMat(pm, e.loadIx, e.C);
   }
 
   return [...byBeam.entries()]
     .sort(([a], [z]) => a - z)
-    .map(([beamIx, b]) => ({
+    .map(([beamIx, perMode]) => ({
       beamIx,
-      deflection: makeDirectional(termsOf(b.total, c)),
-      byMode: [...b.perMode.entries()].map(([mode, m]) => ({
+      byMode: [...perMode.entries()].map(([mode, m]) => ({
         mode,
-        deflection: makeDirectional(termsOf(m, c)),
+        deflection_mm: makeDirectional(termsOf(m, c)),
         perLoad: [...m.entries()]
           .sort(([a], [z]) => a - z)
           .map(([loadIx, C]) => ({
             loadIx,
-            deflection: makeDirectional([{ N: transpose(C), F: c.loadFmax_N[loadIx] ?? 0 }]),
+            deflection_mm: makeDirectional([{ N: transpose(C), F_N: c.loadFmax_N[loadIx] ?? 0 }]),
           })),
       })),
     }));
@@ -123,10 +126,10 @@ function makeDirectional(ts: DeltaTerm[]): Directional {
     return delta(dn, ts);
   }
 
-  function findMax(): { dir: Vec3; value: number } {
-    if (ts.length === 0) return { dir: [1, 0, 0], value: 0 };
+  function findMax(): { dir_unit: Vec3; value: number } {
+    if (ts.length === 0) return { dir_unit: [1, 0, 0], value: 0 };
 
-    let best: { dir: Vec3; value: number } | null = null;
+    let best: { dir_unit: Vec3; value: number } | null = null;
     // Multiple seeds to escape any flat region; convex max means any single
     // seed almost always converges, but seeding with axes is cheap insurance.
     const seeds: Vec3[] = [
@@ -139,15 +142,15 @@ function makeDirectional(ts: DeltaTerm[]): Directional {
       for (let iter = 0; iter < 60; iter++) {
         // Gradient ∇δ(d) = Σ_p F_p · N_p^T · (N_p d) / |N_p d|
         const g: Vec3 = [0, 0, 0];
-        for (const { N, F } of ts) {
+        for (const { N, F_N } of ts) {
           const v = matVec(N, d);
           const mag = Math.hypot(v[0], v[1], v[2]);
           if (mag < 1e-30) continue;
           const u: Vec3 = [v[0] / mag, v[1] / mag, v[2] / mag];
           const gradTerm = matVecT(N, u); // N^T · u
-          g[0] += F * gradTerm[0];
-          g[1] += F * gradTerm[1];
-          g[2] += F * gradTerm[2];
+          g[0] += F_N * gradTerm[0];
+          g[1] += F_N * gradTerm[1];
+          g[2] += F_N * gradTerm[2];
         }
         const gn = normalizeOrZero(g);
         if (gn === null) break;
@@ -160,7 +163,7 @@ function makeDirectional(ts: DeltaTerm[]): Directional {
         }
         d = gn; val = newVal;
       }
-      if (!best || val > best.value) best = { dir: d, value: val };
+      if (!best || val > best.value) best = { dir_unit: d, value: val };
     }
     return best!;
   }
@@ -174,33 +177,31 @@ function makeDirectional(ts: DeltaTerm[]): Directional {
       const r = Math.sqrt(Math.max(0, 1 - z * z));
       const phi = golden * i;
       const d: Vec3 = [r * Math.cos(phi), r * Math.sin(phi), z];
-      out.push({ dir: d, value: at(d) });
+      out.push({ dir_unit: d, value: at(d) });
     }
     return out;
   }
 
-  const dir: Directional = {
-    at,
-    max: findMax,
-    sample,
-    termsForGpuCompute: (maxTerms) => capTerms(ts, maxTerms),
-  };
+  const dir: Directional = { terms: ts, at, max: findMax, sample };
   return dir;
 }
 
-// At most `maxTerms` terms for a fixed-size GPU uniform array. Keep the largest
-// by F·‖N‖_F; fold the rest into one residue term. Since |N·d| ≤ ‖N‖_F for unit
-// d, c = Σ_residue F·‖N‖_F upper-bounds the dropped terms, and an N=identity
-// term reproduces that constant (|I·d| = 1).
-function capTerms(ts: readonly DeltaTerm[], maxTerms: number): readonly DeltaTerm[] {
+/**
+ * Truncate to at most `maxTerms` terms for a fixed-size uniform array (e.g.
+ * a GPU shader). Keep the largest by F·‖N‖_F; fold the rest into one residue
+ * term. Since |N·d| ≤ ‖N‖_F for unit d, c = Σ_residue F·‖N‖_F upper-bounds the
+ * dropped terms, and an N=identity term reproduces that constant (|I·d| = 1).
+ * Net effect: the truncated δ is a pointwise upper bound on the exact one.
+ */
+export function capTermsForUniform(ts: readonly DeltaTerm[], maxTerms: number): readonly DeltaTerm[] {
   if (ts.length <= maxTerms) return ts;
   const ranked = ts
-    .map((t) => ({ t, w: t.F * frobenius(t.N) }))
+    .map((t) => ({ t, w: t.F_N * frobenius(t.N) }))
     .sort((a, b) => b.w - a.w);
   const kept: DeltaTerm[] = ranked.slice(0, maxTerms - 1).map((r) => r.t);
   let residue = 0;
   for (let i = maxTerms - 1; i < ranked.length; i++) residue += ranked[i]!.w;
-  kept.push({ N: [1, 0, 0, 0, 1, 0, 0, 0, 1], F: residue });
+  kept.push({ N: [1, 0, 0, 0, 1, 0, 0, 0, 1], F_N: residue });
   return kept;
 }
 
@@ -253,7 +254,7 @@ function accumMat(m: Map<number, Mat3>, loadIx: number, C: Mat3): void {
 function termsOf(byLoad: Map<number, Mat3>, c: Compliances): DeltaTerm[] {
   const ts: DeltaTerm[] = [];
   for (const [loadIx, C] of byLoad) {
-    ts.push({ N: transpose(C), F: c.loadFmax_N[loadIx] ?? 0 });
+    ts.push({ N: transpose(C), F_N: c.loadFmax_N[loadIx] ?? 0 });
   }
   return ts;
 }

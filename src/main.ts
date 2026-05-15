@@ -50,7 +50,7 @@ const scene = new Scene(canvas, (nodeIx) => {
   // Auto-pick the biggest non-overflown δ-exag for this node so a click is
   // also a "show me this node clearly" gesture. Initial tip selection stays
   // at ×1 (this callback only fires on user picks, not on default-select).
-  const recommended = scene.recommendDisplayScale(n.deflection.max().value);
+  const recommended = scene.recommendDisplayScale(n.deflection_mm.max().value);
   if (recommended !== currentScale) {
     currentScale = recommended;
     updateScaleButtons();
@@ -83,11 +83,11 @@ function computeHoverSegments(): HoverSegment[] | null {
       if (!bd) continue;
       const bm = bd.byMode.find((m) => m.mode === key.mode);
       if (!bm) continue;
-      const { dir, value } = bm.deflection.max();
+      const { dir_unit, value } = bm.deflection_mm.max();
       if (value === 0) continue;
       segs.push({
         origin_mm: node.pos_mm,
-        vector_mm: [dir[0] * value, dir[1] * value, dir[2] * value],
+        vector_mm: [dir_unit[0] * value, dir_unit[1] * value, dir_unit[2] * value],
       });
     }
   }

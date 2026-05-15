@@ -30,24 +30,23 @@ export type Mode =
   | 'bendIyTrans'
   | 'bendIyRot';
 
-export interface Node {
+interface Node {
   beamIx: number;
   offset_mm: number;
 }
 
 /**
- * Load node: 'force' for real loads; 'moment' appears synthetically for the
- * fixed-fixed clamp-moment reaction, paired with a synthetic clamp-force
- * reaction. `source` is 'real' for caller-supplied loads, 'clamp' for the
- * synthetic fixed-fixed reactions — the latter are popped before Compliances
- * is returned, so externally every load is 'real' / 'force'.
+ * Load node. Real caller-supplied loads are `kind: 'force', source: 'real'`.
+ * For `support: 'both'` we transiently add two `source: 'clamp'` synthetic
+ * loads at the root-beam end (a force and a moment) to solve the fixed-fixed
+ * compatibility system; they're discarded before `Compliances` is returned.
  */
-export interface LoadNode extends Node {
+interface LoadNode extends Node {
   kind: 'force' | 'moment';
   source: 'real' | 'clamp';
 }
 
-export interface ComplianceEntry {
+interface ComplianceEntry {
   queryIx: number;
   loadIx: number;
   beamIx: number;
@@ -62,11 +61,7 @@ export interface ComplianceEntry {
 }
 
 export interface Compliances {
-  /** one per beam end (chain joints) */
-  queryNodes: Node[];
-  /** real force loads (post-adjust, no synthetic) */
-  loadNodes: LoadNode[];
-  /** parallel to loadNodes */
+  /** F_max for each real load, in caller order. */
   loadFmax_N: number[];
   /** sparse: only nonzero (q, p, b, m) */
   entries: ComplianceEntry[];
@@ -316,7 +311,7 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
     return { queryIx: q, loadIx: p, C };
   });
 
-  return { queryNodes, loadNodes, loadFmax_N, entries, totals, rotationTotals };
+  return { loadFmax_N, entries, totals, rotationTotals };
 }
 
 // ---------- fixed-fixed (support(both)) ----------

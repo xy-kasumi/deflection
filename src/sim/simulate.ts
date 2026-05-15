@@ -1,6 +1,6 @@
 import type { DeflectionQuery, Problem, Vec3 } from './problem';
 import { buildCompliances } from './compliance';
-import type { Compliances, Mat3, Mode } from './compliance';
+import type { Mode } from './compliance';
 import { directionalFor, rotationFor, beamDirectionals, type Directional } from './directional';
 
 export type SimOutcome = SimResult | SimError;
@@ -9,11 +9,6 @@ export interface SimResult {
   kind: 'ok';
   /** 1:1 with Problem.queries, same order */
   queryResults: DeflectionQueryResult[];
-  /**
-   * Apply concrete per-load forces → fully determined, trivially decomposable
-   * deflections. Reuses cached compliances; no structural re-solve.
-   */
-  under(forces: Force[]): DeterminedResult;
 }
 
 export interface SimError {
@@ -26,65 +21,32 @@ export interface SimError {
  * Per-query result. All vectors here are world-frame.
  */
 export interface DeflectionQueryResult {
+  /** Index into Problem.queries (and into SimResult.queryResults). */
   queryIx: number;
   query: DeflectionQuery;
   /** Undeformed position. */
   pos_mm: Vec3;
-  /** Full δ(dir) distribution (translation). */
-  deflection: Directional;
-  /** Full δθ(axis) distribution (linearized rotation about each axis, rad). */
-  rotation: Directional;
-  /** Per-beam (and per-mode) δ in isolation; do not sum to deflection. */
+  /** Translation worst-case distribution; .at/.max/.sample values are mm. */
+  deflection_mm: Directional;
+  /** Rotation worst-case distribution; .at/.max/.sample values are rad. */
+  rotation_rad: Directional;
+  /** Per-beam (and per-mode) δ in isolation; do not sum to deflection_mm. */
   beamDeflections: BeamDeflection[];
-  /** The per-load worst-case forces that realize δ toward `dir`. */
-  forcesAt(dir: Vec3): Force[];
 }
 
 export interface BeamDeflection {
   beamIx: number;
-  /** δ from this beam's compliance alone (worst-cased independently). */
-  deflection: Directional;
   byMode: {
     mode: Mode;
-    deflection: Directional;
+    /** δ from this beam/mode in isolation; .at/.max values are mm. */
+    deflection_mm: Directional;
     /**
-     * The single-load, single-(beam, mode) δ_p(d) = F_p · |C_{b,m,p}^T d|. Used
-     * by Scalar mode to attribute its (b,m)-summed bound back to loads: at each
-     * (b,m)'s own argmax d*, F_p · |C_{b,m,p}^T d*| is load p's contribution.
-     * Sum over (b, m, p) of these equals the Scalar headline exactly.
+     * Single-load, single-(beam, mode) δ_p(d) = F_p · |C_{b,m,p}^T d|. Lets a
+     * caller attribute the (b, m)-summed pessimistic bound back to loads: at
+     * each (b, m)'s argmax d*, F_p · |C_{b,m,p}^T d*| is load p's share, and
+     * Σ_{b, m, p} of those equals the bound. Values are mm.
      */
-    perLoad: { loadIx: number; deflection: Directional }[];
-  }[];
-}
-
-export interface Force {
-  loadIx: number;
-  /** World-frame force vector applied at the load node. */
-  F_N: Vec3;
-}
-
-/** Deflection at every query under one concrete set of per-load forces. */
-export interface DeterminedResult {
-  /** The applied forces, echoed back. */
-  forces: Force[];
-  /** 1:1 with Problem.queries, same order. */
-  queryResults: DeterminedDeflection[];
-}
-
-/**
- * A fully determined deflection: forces are concrete, so the response is a
- * linear system and every contribution list below sums exactly to `vector_mm`.
- */
-export interface DeterminedDeflection {
-  queryIx: number;
-  pos_mm: Vec3;
-  vector_mm: Vec3;
-  perLoad: { loadIx: number; vector_mm: Vec3 }[];
-  /** Ordered root → tip. */
-  perBeam: {
-    beamIx: number;
-    vector_mm: Vec3;
-    byMode: { mode: Mode; vector_mm: Vec3 }[];
+    perLoad: { loadIx: number; deflection_mm: Directional }[];
   }[];
 }
 
@@ -102,14 +64,12 @@ export function simulate(problem: Problem): SimOutcome {
 
   const beams = problem.beams;
   if (beams.length === 0) {
-    return { kind: 'ok', queryResults: [], under: (forces) => ({ forces, queryResults: [] }) };
+    return { kind: 'ok', queryResults: [] };
   }
 
   const compliances = buildCompliances(problem);
   if ('kind' in compliances) return compliances; // SimError
 
-  // One result per query. All direction-dependent work is deferred to the
-  // result's own methods (forcesAt) and SimResult.under() — see those.
   const queryResults: DeflectionQueryResult[] = [];
   for (let queryIx = 0; queryIx < problem.queries.length; queryIx++) {
     const query = problem.queries[queryIx]!;
@@ -123,123 +83,13 @@ export function simulate(problem: Problem): SimOutcome {
       queryIx,
       query,
       pos_mm: worldPos,
-      deflection: directionalFor(compliances, queryIx),
-      rotation: rotationFor(compliances, queryIx),
+      deflection_mm: directionalFor(compliances, queryIx),
+      rotation_rad: rotationFor(compliances, queryIx),
       beamDeflections: beamDirectionals(compliances, queryIx),
-      forcesAt: (dir) => computeForces(compliances, queryIx, dir),
     });
   }
 
-  return {
-    kind: 'ok',
-    queryResults,
-    under: (forces) => applyForces(compliances, queryResults, forces),
-  };
-}
-
-// Apply concrete per-load forces over the cached compliances. Pure linear
-// superposition: each entry contributes C·F, accumulated per load / beam /
-// (beam, mode). No re-solve.
-function applyForces(
-  c: Compliances,
-  queryResults: DeflectionQueryResult[],
-  forces: Force[],
-): DeterminedResult {
-  const F: Vec3[] = c.loadNodes.map(() => [0, 0, 0]);
-  for (const f of forces) {
-    if (f.loadIx >= 0 && f.loadIx < F.length) F[f.loadIx] = f.F_N;
-  }
-
-  const out: DeterminedDeflection[] = queryResults.map((qr) => {
-    const q = qr.queryIx;
-    const total: Vec3 = [0, 0, 0];
-    const perLoadMap = new Map<number, Vec3>();
-    const perBeamMap = new Map<number, { vector_mm: Vec3; byMode: Map<Mode, Vec3> }>();
-
-    for (const e of c.entries) {
-      if (e.queryIx !== q) continue;
-      const cf = matVec(e.C, F[e.loadIx]!);
-      addInto(total, cf);
-
-      let pl = perLoadMap.get(e.loadIx);
-      if (!pl) { pl = [0, 0, 0]; perLoadMap.set(e.loadIx, pl); }
-      addInto(pl, cf);
-
-      let pb = perBeamMap.get(e.beamIx);
-      if (!pb) { pb = { vector_mm: [0, 0, 0], byMode: new Map() }; perBeamMap.set(e.beamIx, pb); }
-      addInto(pb.vector_mm, cf);
-      let bm = pb.byMode.get(e.mode);
-      if (!bm) { bm = [0, 0, 0]; pb.byMode.set(e.mode, bm); }
-      addInto(bm, cf);
-    }
-
-    return {
-      queryIx: q,
-      pos_mm: qr.pos_mm,
-      vector_mm: total,
-      perLoad: [...perLoadMap.entries()]
-        .sort(([a], [b]) => a - b)
-        .map(([loadIx, vector_mm]) => ({ loadIx, vector_mm })),
-      perBeam: [...perBeamMap.entries()]
-        .sort(([a], [b]) => a - b)
-        .map(([beamIx, v]) => ({
-          beamIx,
-          vector_mm: v.vector_mm,
-          byMode: [...v.byMode.entries()].map(([mode, vector_mm]) => ({ mode, vector_mm })),
-        })),
-    };
-  });
-
-  return { forces, queryResults: out };
-}
-
-// The per-load worst-case forces F_p* that realize δ_q toward `dir`: each load
-// independently maximizes its own contribution along `dir`.
-function computeForces(c: Compliances, queryIx: number, dir: Vec3): Force[] {
-  const dn = normalizeOrZero(dir);
-  const forces: Force[] = [];
-  for (const t of c.totals) {
-    if (t.queryIx !== queryIx) continue;
-    const Fmax = c.loadFmax_N[t.loadIx] ?? 0;
-    let F_N: Vec3 = [0, 0, 0];
-    if (dn) {
-      const v = matVecT(t.C, dn);
-      const mag = Math.hypot(v[0], v[1], v[2]);
-      if (mag > 1e-30) {
-        F_N = [Fmax * v[0] / mag, Fmax * v[1] / mag, Fmax * v[2] / mag];
-      }
-    }
-    forces.push({ loadIx: t.loadIx, F_N });
-  }
-  return forces;
-}
-
-function matVec(M: Mat3, v: Vec3): Vec3 {
-  return [
-    M[0] * v[0] + M[1] * v[1] + M[2] * v[2],
-    M[3] * v[0] + M[4] * v[1] + M[5] * v[2],
-    M[6] * v[0] + M[7] * v[1] + M[8] * v[2],
-  ];
-}
-
-function matVecT(M: Mat3, v: Vec3): Vec3 {
-  return [
-    M[0] * v[0] + M[3] * v[1] + M[6] * v[2],
-    M[1] * v[0] + M[4] * v[1] + M[7] * v[2],
-    M[2] * v[0] + M[5] * v[1] + M[8] * v[2],
-  ];
-}
-
-function normalizeOrZero(v: Vec3): Vec3 | null {
-  const m = Math.hypot(v[0], v[1], v[2]);
-  if (m < 1e-30) return null;
-  return [v[0] / m, v[1] / m, v[2] / m];
-}
-
-function addInto(a: Vec3, b: Vec3): void {
-  a[0] += b[0];
-  a[1] += b[1];
-  a[2] += b[2];
+  return { kind: 'ok', queryResults };
 }
 
 // Validate sim/'s structural preconditions: the chain is serial, clamped at

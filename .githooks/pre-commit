@@ -1,0 +1,5 @@
+#!/bin/sh
+# Run typecheck + smoke before letting a commit through.
+# Enabled via `core.hooksPath = .githooks` (set by `npm install` → `prepare`).
+set -e
+npm test --silent

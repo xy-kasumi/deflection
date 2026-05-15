@@ -93,8 +93,8 @@ export function renderBreakdown(
   const headline = document.createElement('div');
   headline.className = 'bd-headline';
   headline.textContent =
-    `δ ≈ ${formatMm(sel.deflection.max().value)}` +
-    `    δθ ≈ ${formatAngle(sel.rotation.max().value)}`;
+    `δ ≈ ${formatMm(sel.deflection_mm.max().value)}` +
+    `    δθ ≈ ${formatAngle(sel.rotation_rad.max().value)}`;
   el.appendChild(headline);
 
   const subhead = document.createElement('div');
@@ -218,9 +218,9 @@ function decompose(sel: DeflectionQueryResult): BreakdownRows {
     const at = (mode: Mode): number => {
       const bm = b.byMode.find((x) => x.mode === mode);
       if (!bm) return 0;
-      const { dir, value } = bm.deflection.max();
+      const { dir_unit, value } = bm.deflection_mm.max();
       for (const pl of bm.perLoad) {
-        perLoadMap.set(pl.loadIx, (perLoadMap.get(pl.loadIx) ?? 0) + pl.deflection.at(dir));
+        perLoadMap.set(pl.loadIx, (perLoadMap.get(pl.loadIx) ?? 0) + pl.deflection_mm.at(dir_unit));
       }
       return value;
     };

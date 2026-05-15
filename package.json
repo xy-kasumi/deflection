@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx scripts/smoke-compliance.ts",
+    "test": "npm run -s typecheck && npm run -s smoke",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
