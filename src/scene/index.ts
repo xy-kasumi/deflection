@@ -152,6 +152,10 @@ export class Scene {
     // contribution stick; cross-fade them out while it's on screen. CSS owns
     // the label transition, so toggling the class once is enough.
     this.labels.setFaded(!!segs && segs.length > 0);
+    // apply() is mandatory after setHover whenever geometry was rebuilt — fresh
+    // cylinders ship at mesh.scale = (1,1,1) (length = 1 mm), so without it
+    // cell-to-cell hovers flash a too-small stick until something else ticks.
+    this.lobes.apply(computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf));
     if (kick) this.startAnim();
     else this.refresh();
   }
