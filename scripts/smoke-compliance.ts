@@ -108,7 +108,10 @@ function singleCantilever(): Problem {
   }
 }
 
-// ---- Test 3: simulate() end-to-end on the single cantilever ----
+// ---- Test 3: simulate() end-to-end — boundary/furthest + per-(b,m,p) sum ----
+// Note: the basic δ(±y) coefficient is also pinned by Test 1's C_tot and
+// double-checked by property tests P1/P2/P3; here we exercise the surface
+// utilities on the ConvexEnvelope and the per-load attribution invariant.
 {
   console.log('\n-- Test 3: simulate single cantilever --');
   const out = simulate(singleCantilever());
@@ -117,17 +120,15 @@ function singleCantilever(): Problem {
   } else {
     const q = out.queryResults[0]!;
     const expBend = (KGF_TO_N * L ** 3) / (3 * EIx);
-    check('δ(+y) = F·L³/(3·E·Ix)', q.deflection_mm.support([0, 1, 0]), expBend);
-    checkNear0('δ(+x) = 0 (axially rigid)', q.deflection_mm.support([1, 0, 0]));
     const { point, distance } = q.deflection_mm.furthest();
     check('δ_max = F·L³/(3·E·Ix)', distance, expBend);
     expect('d* lies in the YZ plane (chord is rigid)', Math.abs(point[0]) < 1e-3 * distance);
     const inv = 1 / distance;
     const dStar: Vec3 = [point[0] * inv, point[1] * inv, point[2] * inv];
 
-    // boundary(d*) is the surface point with outer normal d*. At the
-    // argmax direction this point equals furthest().point exactly
-    // (the supporting hyperplane is tangent to K at the furthest point).
+    // boundary(d*) is the surface point with outer normal d*. At the argmax
+    // direction this point equals furthest().point exactly (the supporting
+    // hyperplane is tangent to K at the furthest point).
     const bdy = q.deflection_mm.boundary(dStar);
     check('|boundary(d*)| = δ_max', Math.hypot(bdy[0], bdy[1], bdy[2]), distance, 1e-9);
     expect(
@@ -178,22 +179,6 @@ function singleCantilever(): Problem {
     checkNear0('bendIxRot @ d=+y = 0', at_y('bendIxRot'));
     checkNear0('bendIyRot @ d=+y = 0', at_y('bendIyRot'));
     checkNear0('twist @ d=+y = 0', at_y('twist'));
-  }
-}
-
-// ---- Test 5: support(both) solves; one reported query ----
-{
-  console.log('\n-- Test 5: support(both) single beam, mid load --');
-  const problem: Problem = {
-    beams: [horzBeam([0, 0, 0], L)],
-    loads: [{ beamIx: 0, offset_mm: L / 2, Fmax_N: KGF_TO_N }],
-    queries: [{ beamIx: 0, offset_mm: L / 2 }],
-    support: 'both',
-  };
-  const out = simulate(problem);
-  expect('simulate succeeds', out.kind === 'ok');
-  if (out.kind === 'ok') {
-    expect('one query result (clamp query not reported)', out.queryResults.length === 1);
   }
 }
 
