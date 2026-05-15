@@ -4,14 +4,38 @@ import type { Load, Vec3 } from './sim/problem';
 import type { Mode } from './sim/compliance';
 import type { LoadProvenance } from './loadsystem';
 
-export type DisplayMode = 'simple' | 'realistic';
+export type DisplayMode = 'scalar' | 'simple' | 'realistic';
 
-// The Directional a query node's lobe represents under the current mode.
+// The Directional a query node's lobe represents under a lobe-rendering mode.
 // Realistic: the true worst-case δ. Simple: the pessimistic sum of the
 // per-(beam,mode) parts — an upper bound on δ (Σ ≥ δ, triangle inequality).
-export function displayDirectional(n: DeflectionQueryResult, mode: DisplayMode): Directional {
+// Scalar mode is excluded: its bound Σ_{b,m} max(δ_{b,m}) is direction-
+// independent, rendered as a sphere (currently skipped) rather than a lobe.
+export function displayDirectional(
+  n: DeflectionQueryResult,
+  mode: 'simple' | 'realistic',
+): Directional {
   if (mode === 'realistic') return n.deflection;
   return sumDirectionals(n.beamDeflections.flatMap((b) => b.byMode.map((m) => m.deflection)));
+}
+
+// Headline δ for the breakdown header and per-node label.
+//   realistic: true δ — max over d of (Σ_p F_p |C^T d|)
+//   simple:    δ ≲ max over d of (Σ_{b,m} δ_{b,m}(d))
+//   scalar:    δ ≲ Σ_{b,m} max(δ_{b,m}) — looser still, direction-independent
+//              (each (beam, mode) part maxed at its own argmax).
+export function displayDelta(n: DeflectionQueryResult, mode: DisplayMode): number {
+  if (mode === 'realistic') return n.deflection.max().value;
+  if (mode === 'simple') return displayDirectional(n, 'simple').max().value;
+  return scalarTotal(n);
+}
+
+function scalarTotal(n: DeflectionQueryResult): number {
+  let s = 0;
+  for (const b of n.beamDeflections) {
+    for (const m of b.byMode) s += m.deflection.max().value;
+  }
+  return s;
 }
 
 /** A hovered breakdown component: a beam (mode null) or one of its modes. */
@@ -53,9 +77,11 @@ export function renderBreakdown(
   const sel = sim.queryResults[selectedNodeIx];
   if (!sel) return;
 
-  const rows = mode === 'simple'
-    ? simpleRows(sel)
-    : realisticRows(sim, sel, selectedNodeIx, pickedDir);
+  const rows = mode === 'realistic'
+    ? realisticRows(sim, sel, selectedNodeIx, pickedDir)
+    : mode === 'simple'
+      ? simpleRows(sel)
+      : scalarRows(sel);
 
   // Header: the δ value, then where it's measured. Simple shows the
   // pessimistic bound it renders (δ ≲ …), Realistic the true worst case
@@ -189,6 +215,22 @@ function realisticRows(
     })),
     perLoad: dd.perLoad.map((pl) => ({ loadIx: pl.loadIx, delta_mm: dot(dir, pl.vector_mm) })),
   };
+}
+
+// Scalar: each (beam, mode) part is independently maxed over its own d, then
+// summed. A looser pessimistic bound than Simple — Σ_{b,m} max ≥ max(Σ_{b,m}) —
+// and direction-independent (no shared d). Loads section omitted: per-load
+// scalars decompose the bound differently and wouldn't sum to the (b,m) total.
+function scalarRows(sel: DeflectionQueryResult): BreakdownRows {
+  const perBeam = sel.beamDeflections.map((b) => {
+    const at = (m: Mode) => b.byMode.find((x) => x.mode === m)?.deflection.max().value ?? 0;
+    const bendIx = at('bendIx');
+    const bendIy = at('bendIy');
+    const torsionJ = at('torsionJ');
+    return { beamIx: b.beamIx, bendIx, bendIy, torsionJ, total: bendIx + bendIy + torsionJ };
+  });
+  const deltaMax = perBeam.reduce((s, b) => s + b.total, 0);
+  return { deltaMax, glyph: '≲', perBeam, perLoad: [] };
 }
 
 // Simple: the pessimistic sum decomposed at its own argmax d_simple*. Every

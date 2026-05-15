@@ -2,7 +2,14 @@ import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
 import { delta, type Directional, type DeltaTerm } from '../sim/directional';
-import { formatMm, displayDirectional, hoverDirectional, type DisplayMode, type HoverKey } from '../breakdown';
+import {
+  formatMm,
+  displayDelta,
+  displayDirectional,
+  hoverDirectional,
+  type DisplayMode,
+  type HoverKey,
+} from '../breakdown';
 import { COLOR, MOTION, hexToVec3 } from './tokens';
 
 // Normal-lobe rendering. Filled mesh with per-vertex t = δ/δ_max. The fragment
@@ -241,42 +248,51 @@ export class LobeRenderer {
     for (let ix = 0; ix < sim.queryResults.length; ix++) {
       const n = sim.queryResults[ix]!;
       const isSel = ix === opts.selectedNodeIx;
-      // The hovered breakdown component (Simple mode) replaces the selected
-      // node's lobe with that component's isolated δ.
-      let lobeDir = displayDirectional(n, opts.mode);
-      if (opts.mode === 'simple' && opts.hovered && isSel) {
-        lobeDir = hoverDirectional(n, opts.hovered) ?? lobeDir;
-      }
-      const delta_max_mm = lobeDir.max().value;
       const worldPos = new THREE.Vector3(...n.pos_mm);
 
-      // All three states are built up-front. The per-frame tick scales/fades
-      // them according to the animated δ-exag; categorical state-switching is
-      // replaced by a continuous crossfade. Base opacities preserve the prior
-      // per-state look at each crossfade endpoint.
-      const reuseMat = this.normalMatPool[ix];
-      const normal = buildNormalLobe(lobeDir, reuseMat);
-      if (!reuseMat) this.normalMatPool[ix] = normal.material as THREE.ShaderMaterial;
-      normal.position.copy(worldPos);
-      meshes.push(normal);
+      // Scalar mode's δ bound is direction-independent (its "lobe" would be a
+      // sphere); skip building lobe meshes entirely. Hit-sphere and label are
+      // still built below so node picking and the floating δ readout work.
+      let delta_max_mm: number;
+      if (opts.mode === 'scalar') {
+        delta_max_mm = displayDelta(n, 'scalar');
+      } else {
+        // The hovered breakdown component (Simple mode) replaces the selected
+        // node's lobe with that component's isolated δ.
+        let lobeDir = displayDirectional(n, opts.mode);
+        if (opts.mode === 'simple' && opts.hovered && isSel) {
+          lobeDir = hoverDirectional(n, opts.hovered) ?? lobeDir;
+        }
+        delta_max_mm = lobeDir.max().value;
 
-      const under = buildUnderflowSphere(opts.lobeFloor);
-      under.position.copy(worldPos);
-      meshes.push(under);
+        // All three states are built up-front. The per-frame tick scales/fades
+        // them according to the animated δ-exag; categorical state-switching is
+        // replaced by a continuous crossfade. Base opacities preserve the prior
+        // per-state look at each crossfade endpoint.
+        const reuseMat = this.normalMatPool[ix];
+        const normal = buildNormalLobe(lobeDir, reuseMat);
+        if (!reuseMat) this.normalMatPool[ix] = normal.material as THREE.ShaderMaterial;
+        normal.position.copy(worldPos);
+        meshes.push(normal);
 
-      const over = buildKonpeito();
-      over.position.copy(worldPos);
-      meshes.push(over);
+        const under = buildUnderflowSphere(opts.lobeFloor);
+        under.position.copy(worldPos);
+        meshes.push(under);
 
-      this.lobeAnims.push({
-        delta_max_mm,
-        normalBase: opts.focused ? 0.15 : isSel ? 0.75 : 0.25,
-        underBase:  opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
-        overBase:   opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
-        normal,
-        under,
-        over,
-      });
+        const over = buildKonpeito();
+        over.position.copy(worldPos);
+        meshes.push(over);
+
+        this.lobeAnims.push({
+          delta_max_mm,
+          normalBase: opts.focused ? 0.15 : isSel ? 0.75 : 0.25,
+          underBase:  opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
+          overBase:   opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
+          normal,
+          under,
+          over,
+        });
+      }
 
       // Invisible hit-test sphere — generous, fixed radius. visible:false skips
       // rendering; intersectObjects(pickables, false) still raycasts it.
