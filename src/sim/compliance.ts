@@ -621,44 +621,50 @@ function modeTorsion(M: Vec3, s_load: number, s_eval: number, G_MPa: number, J_m
   return { defl: [0, 0, 0], rot: [0, 0, theta_z] };
 }
 
+// Shared Euler-Bernoulli cantilever kernel for the two bending modes.
+//
+// In-plane bending of a cantilever along +Z (fixed at s=0). One bending plane
+// per call: choose `F_perp` and `M_about` as the in-plane projections of the
+// applied (F, M). Returns (u_perp, rot_about) at s_eval given a tip-style
+// (force + moment) load at s_load — both with zero BCs at the base.
+//
+// `sigma` ties the rotation-vector sign to (axis_perp, axis_about, axial)
+// chirality. For (perp=y, about=x, axial=z) — i.e. bending about beam-X —
+// sigma = -1: positive du_perp/ds (beam tilts toward +y) corresponds to a
+// *negative* rotation about +x, since +x rotation takes +z toward -y. For
+// (perp=x, about=y, axial=z) — bending about beam-Y — sigma = +1.
+//
+// The same sigma also flips the M_about coefficient because the moment that
+// drives positive u_perp is itself sign-tied to the same chirality: the
+// formula carries -sigma * M_about throughout.
+function modeBend(
+  F_perp: number, M_about: number,
+  s_load: number, s_eval: number, EI: number, sigma: -1 | 1,
+): { u_perp: number; rot_about: number } {
+  let u_perp: number;
+  let du_ds: number;
+  if (s_eval <= s_load) {
+    u_perp = (F_perp * s_eval * s_eval * (3 * s_load - s_eval) / 6 - sigma * M_about * s_eval * s_eval / 2) / EI;
+    du_ds  = (F_perp * s_eval * (s_load - s_eval / 2)              - sigma * M_about * s_eval)              / EI;
+  } else {
+    const u_at  = (F_perp * s_load * s_load * s_load / 3 - sigma * M_about * s_load * s_load / 2) / EI;
+    const du_at = (F_perp * s_load * s_load / 2          - sigma * M_about * s_load)              / EI;
+    u_perp = u_at + du_at * (s_eval - s_load);
+    du_ds  = du_at;
+  }
+  return { u_perp, rot_about: sigma * du_ds };
+}
+
 function modeBendIx(F: Vec3, M: Vec3, s_load: number, s_eval: number, E_MPa: number, Ix_mm4: number): ModeOut {
   if (Ix_mm4 <= 0 || E_MPa <= 0) return ZERO;
-  const EI = E_MPa * Ix_mm4;
-  const Fy = F[1];
-  const Mx = M[0];
-  let u_y: number;
-  let du_y_ds: number;
-  if (s_eval <= s_load) {
-    u_y     = (Fy * s_eval * s_eval * (3 * s_load - s_eval) / 6 + Mx * s_eval * s_eval / 2) / EI;
-    du_y_ds = (Fy * s_eval * (s_load - s_eval / 2)            + Mx * s_eval)                / EI;
-  } else {
-    const u_at  = (Fy * s_load * s_load * s_load / 3 + Mx * s_load * s_load / 2) / EI;
-    const du_at = (Fy * s_load * s_load / 2          + Mx * s_load)              / EI;
-    u_y     = u_at + du_at * (s_eval - s_load);
-    du_y_ds = du_at;
-  }
-  // θ_x = -du_y/ds (rotation about +X tilts +Z toward -Y).
-  return { defl: [0, u_y, 0], rot: [-du_y_ds, 0, 0] };
+  const r = modeBend(F[1], M[0], s_load, s_eval, E_MPa * Ix_mm4, -1);
+  return { defl: [0, r.u_perp, 0], rot: [r.rot_about, 0, 0] };
 }
 
 function modeBendIy(F: Vec3, M: Vec3, s_load: number, s_eval: number, E_MPa: number, Iy_mm4: number): ModeOut {
   if (Iy_mm4 <= 0 || E_MPa <= 0) return ZERO;
-  const EI = E_MPa * Iy_mm4;
-  const Fx = F[0];
-  const My = M[1];
-  let u_x: number;
-  let du_x_ds: number;
-  if (s_eval <= s_load) {
-    u_x     = (Fx * s_eval * s_eval * (3 * s_load - s_eval) / 6 - My * s_eval * s_eval / 2) / EI;
-    du_x_ds = (Fx * s_eval * (s_load - s_eval / 2)            - My * s_eval)                / EI;
-  } else {
-    const u_at  = (Fx * s_load * s_load * s_load / 3 - My * s_load * s_load / 2) / EI;
-    const du_at = (Fx * s_load * s_load / 2          - My * s_load)              / EI;
-    u_x     = u_at + du_at * (s_eval - s_load);
-    du_x_ds = du_at;
-  }
-  // θ_y = du_x/ds (rotation about +Y tilts +Z toward +X).
-  return { defl: [u_x, 0, 0], rot: [0, du_x_ds, 0] };
+  const r = modeBend(F[0], M[1], s_load, s_eval, E_MPa * Iy_mm4, +1);
+  return { defl: [r.u_perp, 0, 0], rot: [0, r.rot_about, 0] };
 }
 
 // ---------- world transport ----------
