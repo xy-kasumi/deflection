@@ -223,5 +223,59 @@ function singleCantilever(): Problem {
   );
 }
 
+// ---- Test 7: non-tip attachment (child branches mid-axis of parent) ----
+// Regression: the compliance solver used to substitute parent.length_mm
+// everywhere it actually meant "where the chain exits this beam." For
+// tip-to-root chains the two coincide, but a `mid:` (or `100:`, etc.) child
+// makes them differ — the parent's segment past the attachment is unloaded
+// and an on-beam query at the attach point has arm = 0 from where the chain
+// exits, so the parent's bend-rotation and twist must contribute nothing to
+// translation there.
+{
+  console.log('\n-- Test 7: mid-attached child branch --');
+  const L0 = 300;
+  const Lattach = 100;
+  const L1 = 100;
+  // beam1: right turn off horz beam0 at offset Lattach. Walker convention
+  // ex↔left, ey↔up, axial↔fwd. Horz parent: F=+X, L=-Z, U=+Y. Right turn:
+  // F'=+Z, L'=+X, U'=+Y. So beam1: axial=+Z, ex=+X, ey=+Y.
+  const beam1: Beam = {
+    frame: {
+      origin_mm: [Lattach, 0, 0],
+      ex: [1, 0, 0], ey: [0, 1, 0], axial: [0, 0, 1],
+    },
+    length_mm: L1,
+    section: RECT_10,
+    material: STEEL,
+  };
+  const problem: Problem = {
+    beams: [horzBeam([0, 0, 0], L0), beam1],
+    loads: [{ beamIx: 1, offset_mm: L1, Fmax_N: KGF_TO_N }],
+    queries: [{ beamIx: 1, offset_mm: 0 }],
+    support: 'single',
+  };
+  const out = simulate(problem);
+  if (out.kind !== 'ok') {
+    expect('simulate ok', false);
+  } else {
+    const q = out.queryResults[0]!;
+    const b0 = q.beamDeflections.find((b) => b.beamIx === 0);
+    expect('beam0 in beamDeflections', !!b0);
+    if (b0) {
+      const at = (m: Mode, d: Vec3): number =>
+        b0.byMode.find((x) => x.mode === m)?.deflection_mm.support(d) ?? 0;
+      // δ_y from beam0 at the attach point comes purely from bendIxTrans,
+      // computed against Lattach (not L0). Pre-fix this used L0 — about
+      // 8× the correct value — and bendIxRot/twist were spuriously nonzero
+      // via a bogus arm = queryPos - beam0_tip.
+      const expBend = (KGF_TO_N * Lattach ** 3) / (3 * EIx);
+      check('beam0 bendIxTrans @ +y = F·L_attach³/(3·E·Ix)', at('bendIxTrans', [0, 1, 0]), expBend, 1e-9);
+      checkNear0('beam0 bendIxRot @ +y = 0 (arm=0)', at('bendIxRot', [0, 1, 0]));
+      checkNear0('beam0 bendIyRot @ +y = 0 (arm=0)', at('bendIyRot', [0, 1, 0]));
+      checkNear0('beam0 twist     @ +y = 0 (arm=0)', at('twist',       [0, 1, 0]));
+    }
+  }
+}
+
 console.log(failed ? '\nSMOKE FAILED' : '\nsmoke ok');
 process.exitCode = failed ? 1 : 0;

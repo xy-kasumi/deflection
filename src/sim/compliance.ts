@@ -116,11 +116,43 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
     loadFmax_N.push(0);
   }
 
-  // Precompute per-beam rotation matrix R_i (frame columns) and tip world pos.
+  // Precompute per-beam rotation matrix R_i (frame columns).
   const Rs: Mat3[] = beams.map((b) => frameToR(b.frame));
-  const tipWorld: Vec3[] = beams.map((b) =>
-    addV(b.frame.origin_mm, scaleV(b.frame.axial, b.length_mm)),
-  );
+
+  // Chain-exit point on each beam i: the (offset, world-position) where beam
+  // i+1 attaches — i.e., where the chain continues. For tip-to-root
+  // connections this equals (length, tip); for non-tip attachments (e.g. a
+  // `mid:` branch) it's the actual attach offset, derived from the next
+  // beam's origin. validate() guarantees beams[i+1].origin lies on beam i's
+  // axial line, so the projection here is exact.
+  //
+  // Why a named array instead of using `length_mm` / `tip = origin + axial·L`
+  // directly: the per-beam math needs "where on beam i does the load/query
+  // sit, when neither is on beam i itself" — which is the chain-exit point,
+  // not beam i's own tip. Collapsing the two only works when every child
+  // attaches at its parent's tip.
+  //
+  // Last beam in the array has no successor; its entry falls back to (L,
+  // tip). The per-beam loop below never reads that fallback in practice (at
+  // i = iMax, either i is the load beam or the query beam — `chainExit_mm`
+  // is only used in the `else` branch).
+  const chainExit_mm: number[] = beams.map((b, i) => {
+    if (i + 1 >= beams.length) return b.length_mm;
+    const child = beams[i + 1]!.frame.origin_mm;
+    const rel: Vec3 = [
+      child[0] - b.frame.origin_mm[0],
+      child[1] - b.frame.origin_mm[1],
+      child[2] - b.frame.origin_mm[2],
+    ];
+    const a = b.frame.axial;
+    return rel[0] * a[0] + rel[1] * a[1] + rel[2] * a[2];
+  });
+  const chainExitWorld: Vec3[] = beams.map((b, i) => {
+    if (i + 1 >= beams.length) {
+      return addV(b.frame.origin_mm, scaleV(b.frame.axial, b.length_mm));
+    }
+    return beams[i + 1]!.frame.origin_mm;
+  });
 
   const entries: ComplianceEntry[] = [];
   const totalsMap = new Map<string, Mat3>();
@@ -166,29 +198,33 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
       for (let i = 0; i <= iMax; i++) {
         const sect = beams[i]!.section;
         const mat = beams[i]!.material;
-        const L_i = beams[i]!.length_mm;
         const R_i = Rs[i]!;
         const R_iT = transposeM(R_i);
-        const tip_i = tipWorld[i]!;
+        const exit_i = chainExitWorld[i]!;
+        const sExit_i = chainExit_mm[i]!;
 
         const onLoadBeam = i === k;
         const onQueryBeam = i === m;
 
-        const s_load_local = onLoadBeam ? s_p : L_i;
-        const s_eval_local = onQueryBeam ? s_q : L_i;
+        // For an upstream beam i (i < k or i < m), the load/query is felt at
+        // beam i's chain-exit offset, not its own tip — those differ when the
+        // next beam attaches mid-axis instead of at the tip.
+        const s_load_local = onLoadBeam ? s_p : sExit_i;
+        const s_eval_local = onQueryBeam ? s_q : sExit_i;
 
         // Where the contribution is sensed in world frame (for transport arm).
         // - if onQueryBeam: at queryWorldPos (no transport arm)
-        // - else (i < m): at beam i's tip; arm to query = queryWorldPos - tip_i.
-        const arm = onQueryBeam ? [0, 0, 0] as Vec3 : subV(queryWorldPos, tip_i);
+        // - else (i < m): at beam i's chain-exit point; arm to query =
+        //   queryWorldPos - exit_i.
+        const arm = onQueryBeam ? [0, 0, 0] as Vec3 : subV(queryWorldPos, exit_i);
 
         // Five rank-1 columns of the per-(q, p, i, mode) entry; one column
-        // per world force axis. The split: each old per-mode `worldContribution`
-        // returned `R·defl + (R·rot) × arm`. We separate the two terms so each
-        // surviving Mat3 has rank ≤ 1 at any query (the trans column points
-        // along a fixed beam-local axis in world; the rot column along a fixed
-        // (axis × arm) direction). Torsion has defl ≡ 0, so it only has the
-        // rotation-transport part — that's what `twist` is.
+        // per world force axis. Each mode's world contribution `R·defl_local
+        // + (R·rot_local) × arm` is split (see translationOnly/transportOnly)
+        // so every surviving Mat3 has rank ≤ 1 at any query (trans column
+        // points along a fixed beam-local axis in world; rot column along a
+        // fixed (axis × arm) direction). Torsion has defl ≡ 0, so it only
+        // has the rotation-transport part — that's what `twist` is.
         const eTwist       = newMat3();
         const eBendIxTrans = newMat3();
         const eBendIxRot   = newMat3();
@@ -198,12 +234,12 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
         for (let j = 0; j < 3; j++) {
           const dir_world: Vec3 = j === 0 ? [1, 0, 0] : j === 1 ? [0, 1, 0] : [0, 0, 1];
 
-          // Effective (F, M) at beam i's tip in WORLD frame.
+          // Effective (F, M) at beam i's chain-exit point in WORLD frame.
           // - 'force' load: F = unit force in world axis j; M = arm × F when
           //   the load is downstream of beam i (zero when on beam i itself).
           // - 'moment' load: F = 0; M = unit moment in world axis j (a free
           //   vector — transports unchanged from load location to beam i's
-          //   tip because F = 0).
+          //   chain-exit point because F = 0).
           let F_world: Vec3;
           let M_world: Vec3;
           if (ln.kind === 'force') {
@@ -211,7 +247,7 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
             if (onLoadBeam) {
               M_world = [0, 0, 0];
             } else {
-              const armToLoad = subV(loadWorldPos, tip_i);
+              const armToLoad = subV(loadWorldPos, exit_i);
               M_world = crossV(armToLoad, F_world);
             }
           } else {
@@ -236,12 +272,12 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
           setMatCol(eBendIyRot,   j, transportOnly(R_i, by.rot, arm));
 
           // Rotation accumulation per (q, p). Sum rotation across the modes
-          // (rotation is a free vector, so world rotation at beam i's tip is
-          // R_i · rot_local), then accumulate across beams. For queries
-          // downstream of beam i, this rotation also propagates *into
-          // translation* via rot × arm — that's already captured in the
-          // per-mode `worldContribution` calls above. Here we collect only
-          // the rotation itself, which is what δθ_q maxes over.
+          // (rotation is a free vector, so world rotation at beam i's eval
+          // point is R_i · rot_local), then accumulate across beams. For
+          // queries downstream of beam i, this rotation also propagates
+          // *into translation* via rot × arm — that's already captured in
+          // the per-mode transport calls above. Here we collect only the
+          // rotation itself, which is what δθ_q maxes over.
           const rotLocalX = to.rot[0] + bx.rot[0] + by.rot[0];
           const rotLocalY = to.rot[1] + bx.rot[1] + by.rot[1];
           const rotLocalZ = to.rot[2] + bx.rot[2] + by.rot[2];
@@ -626,20 +662,13 @@ function modeBendIy(F: Vec3, M: Vec3, s_load: number, s_eval: number, E_MPa: num
 }
 
 // ---------- world transport ----------
+//
+// World deflection at the query from one (beam, mode) = R·defl_local +
+// (R·rot_local) × arm. Split into two rank-1-preserving pieces so the
+// per-(q, p, i, mode) Mat3 stays rank ≤ 1: translationOnly is along a fixed
+// world direction (a column of R); transportOnly is along (R·column × arm).
+// The 5-mode breakdown semantics rely on that rank-1 property.
 
-function worldContribution(R: Mat3, mode: ModeOut, arm_world: Vec3): Vec3 {
-  // world deflection at the query = R·defl_local + (R·rot_local) × arm.
-  const dW = matVec(R, mode.defl);
-  const rotW = matVec(R, mode.rot);
-  const transport = crossV(rotW, arm_world);
-  return [dW[0] + transport[0], dW[1] + transport[1], dW[2] + transport[2]];
-}
-
-// Rank-1-preserving split of worldContribution. translationOnly returns the
-// `R·defl_local` part; transportOnly returns the `(R·rot_local) × arm` part.
-// Each is along a fixed world direction (R's column for trans; that column ×
-// arm for transport), so the resulting per-(q, p, i, mode) Mat3 is rank ≤ 1
-// — which is what the 5-mode breakdown semantics rely on.
 function translationOnly(R: Mat3, defl_local: Vec3): Vec3 {
   return matVec(R, defl_local);
 }
