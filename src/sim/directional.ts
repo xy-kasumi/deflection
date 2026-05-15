@@ -1,6 +1,6 @@
 import type { Compliances, Mat3, Mode } from './compliance';
 import type { Vec3 } from './problem';
-import type { BeamDeflection, LoadDeflection } from './simulate';
+import type { BeamDeflection } from './simulate';
 
 // Directional distribution at a query node q:
 //
@@ -100,25 +100,6 @@ export function beamDirectionals(c: Compliances, queryIx: number): BeamDeflectio
     }));
 }
 
-/**
- * δ restricted to each load in isolation — that load alone, worst-cased over
- * its own force direction. Like beamDirectionals, these do NOT sum to the
- * whole-structure Directional, but Σ over loads (or beams, or modes) of the
- * isolated lobes IS exact and equals the pessimistic sum.
- */
-export function loadDirectionals(c: Compliances, queryIx: number): LoadDeflection[] {
-  const byLoad = new Map<number, DeltaTerm[]>();
-  for (const e of c.entries) {
-    if (e.queryIx !== queryIx) continue;
-    let ts = byLoad.get(e.loadIx);
-    if (!ts) { ts = []; byLoad.set(e.loadIx, ts); }
-    ts.push({ N: transpose(e.C), F: c.loadFmax_N[e.loadIx] ?? 0 });
-  }
-  return [...byLoad.entries()]
-    .sort(([a], [z]) => a - z)
-    .map(([loadIx, ts]) => ({ loadIx, deflection: makeDirectional(ts) }));
-}
-
 // Build the δ(d) = Σ F·|N·d| evaluator over a fixed term list.
 function makeDirectional(ts: DeltaTerm[]): Directional {
   function at(dir: Vec3): number {
@@ -189,23 +170,7 @@ function makeDirectional(ts: DeltaTerm[]): Directional {
     sample,
     termsForGpuCompute: (maxTerms) => capTerms(ts, maxTerms),
   };
-  rawTerms.set(dir, ts);
   return dir;
-}
-
-// Exact terms of each makeDirectional-built Directional. The public accessor
-// (termsForGpuCompute) is intentionally lossy, so sumDirectionals recovers the
-// originals here to keep the sum exact.
-const rawTerms = new WeakMap<Directional, readonly DeltaTerm[]>();
-
-/** Exact sum of Directionals: δ(d) = Σ δ_i(d). Concatenates term lists. */
-export function sumDirectionals(ds: Directional[]): Directional {
-  const all: DeltaTerm[] = [];
-  for (const d of ds) {
-    const raw = rawTerms.get(d);
-    if (raw) all.push(...raw);
-  }
-  return makeDirectional(all);
 }
 
 // At most `maxTerms` terms for a fixed-size GPU uniform array. Keep the largest

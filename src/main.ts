@@ -6,7 +6,7 @@ import { walk } from './walker';
 import { buildLoadSystem, simErrorToDiagnostic } from './loadsystem';
 import { simulate, type SimResult } from './sim/simulate';
 import type { Vec3 } from './sim/problem';
-import { renderBreakdown, type DisplayMode, type HoverKey } from './breakdown';
+import { renderBreakdown, type DisplayMode } from './breakdown';
 import { DirPicker } from './picker';
 
 const INITIAL_SRC = `support(single)
@@ -30,9 +30,6 @@ let editorFocused = false;
 let selectedKey: { beamIx: number; offset_mm: number } | null = null;
 let lastSim: SimResult | null = null;
 let mode: DisplayMode = 'realistic';
-// Hovered breakdown component (Simple mode only) — swaps the selected node's
-// lobe to that component's isolated δ.
-let hovered: HoverKey | null = null;
 // User-picked direction for the selected node (Realistic mode) — null means
 // decompose at the auto worst-case d*. Reset whenever the selection changes.
 let selectedDir: Vec3 | null = null;
@@ -82,7 +79,6 @@ function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
 
 // Full pass: parse → simulate. Caches the result in `last`, then draws.
 function render() {
-  hovered = null;
   selectedDir = null;
   const { structure, diagnostics: pd } = parse(lastSrc);
   const sd = semcheck(structure);
@@ -122,7 +118,7 @@ function redrawBreakdown() {
   if (out.kind === 'error') {
     pickerHostEl.style.display = 'none';
     renderBreakdown(
-      infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode, onHover, selectedDir,
+      infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode, selectedDir,
     );
   } else {
     const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
@@ -136,39 +132,24 @@ function redrawBreakdown() {
     }
     renderBreakdown(
       infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode,
-      onHover, selectedDir,
+      selectedDir,
     );
   }
   updateScaleButtons();
 }
 
-// Just the 3D scene. The hover path uses this — it leaves the breakdown pane
-// in place and only swaps the selected node's lobe.
+// Just the 3D scene.
 function redrawScene() {
   if (!last) return;
   const { beams, ls, out, currentBeamIx } = last;
   if (out.kind === 'error') {
-    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1, mode, null);
+    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1, mode);
   } else {
     const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
     scene.update(
-      beams, out, ls.supportKind, { currentBeamIx, focused: editorFocused }, selectedNodeIx, mode, hovered,
+      beams, out, ls.supportKind, { currentBeamIx, focused: editorFocused }, selectedNodeIx, mode,
     );
   }
-}
-
-// Hover handler passed to renderBreakdown. Dedups (pointermove fires often),
-// then refreshes only the scene — the breakdown pane stays put.
-function onHover(h: HoverKey | null) {
-  if (sameHover(h, hovered)) return;
-  hovered = h;
-  redrawScene();
-}
-
-function sameHover(a: HoverKey | null, b: HoverKey | null): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return a.beamIx === b.beamIx && a.mode === b.mode;
 }
 
 // Direction picked on the Realistic-mode equirectangular picker — re-decompose
@@ -215,7 +196,6 @@ modeToggleEl.addEventListener('click', (e) => {
   const m = btn.dataset['mode'] as DisplayMode;
   if (m === mode) return;
   mode = m;
-  hovered = null;
   selectedDir = null;
   updateModeButtons();
   redraw();
@@ -245,7 +225,6 @@ render();
   get sim()   { return lastSim; },
   get scale() { return currentScale; },
   get mode()  { return mode; },
-  get hovered() { return hovered; },
   get selectedDir() { return selectedDir; },
   get selectedKey() { return selectedKey; },
 };

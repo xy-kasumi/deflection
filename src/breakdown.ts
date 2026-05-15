@@ -1,32 +1,16 @@
 import type { SimResult, DeflectionQueryResult } from './sim/simulate';
-import { sumDirectionals, type Directional } from './sim/directional';
 import type { Load, Vec3 } from './sim/problem';
 import type { Mode } from './sim/compliance';
 import type { LoadProvenance } from './loadsystem';
 
-export type DisplayMode = 'scalar' | 'simple' | 'realistic';
-
-// The Directional a query node's lobe represents under a lobe-rendering mode.
-// Realistic: the true worst-case δ. Simple: the pessimistic sum of the
-// per-(beam,mode) parts — an upper bound on δ (Σ ≥ δ, triangle inequality).
-// Scalar mode is excluded: its bound Σ_{b,m} max(δ_{b,m}) is direction-
-// independent, rendered as a sphere (currently skipped) rather than a lobe.
-export function displayDirectional(
-  n: DeflectionQueryResult,
-  mode: 'simple' | 'realistic',
-): Directional {
-  if (mode === 'realistic') return n.deflection;
-  return sumDirectionals(n.beamDeflections.flatMap((b) => b.byMode.map((m) => m.deflection)));
-}
+export type DisplayMode = 'scalar' | 'realistic';
 
 // Headline δ for the breakdown header and per-node label.
 //   realistic: true δ — max over d of (Σ_p F_p |C^T d|)
-//   simple:    δ ≲ max over d of (Σ_{b,m} δ_{b,m}(d))
-//   scalar:    δ ≲ Σ_{b,m} max(δ_{b,m}) — looser still, direction-independent
-//              (each (beam, mode) part maxed at its own argmax).
+//   scalar:    δ ≲ Σ_{b,m} max(δ_{b,m}) — looser pessimistic bound,
+//              direction-independent (each (b, m) part maxed at its own argmax).
 export function displayDelta(n: DeflectionQueryResult, mode: DisplayMode): number {
   if (mode === 'realistic') return n.deflection.max().value;
-  if (mode === 'simple') return displayDirectional(n, 'simple').max().value;
   return scalarTotal(n);
 }
 
@@ -36,18 +20,6 @@ function scalarTotal(n: DeflectionQueryResult): number {
     for (const m of b.byMode) s += m.deflection.max().value;
   }
   return s;
-}
-
-/** A hovered breakdown component: a beam (mode null) or one of its modes. */
-export type HoverKey = { beamIx: number; mode: Mode | null };
-
-// The isolated Directional for a hovered component, or null if it can't be
-// resolved (e.g. the beam has no entry for that mode).
-export function hoverDirectional(n: DeflectionQueryResult, h: HoverKey): Directional | null {
-  const bd = n.beamDeflections.find((b) => b.beamIx === h.beamIx);
-  if (!bd) return null;
-  if (h.mode === null) return bd.deflection;
-  return bd.byMode.find((m) => m.mode === h.mode)?.deflection ?? null;
 }
 
 // Renders the deflection breakdown pane into #info. Plain DOM, no framework.
@@ -64,7 +36,6 @@ export function renderBreakdown(
   tipNodeIx: number,
   src: string,
   mode: DisplayMode,
-  onHover: (h: HoverKey | null) => void,
   pickedDir: Vec3 | null,
 ): void {
   el.innerHTML = '';
@@ -79,13 +50,11 @@ export function renderBreakdown(
 
   const rows = mode === 'realistic'
     ? realisticRows(sim, sel, selectedNodeIx, pickedDir)
-    : mode === 'simple'
-      ? simpleRows(sel)
-      : scalarRows(sel);
+    : scalarRows(sel);
 
-  // Header: the δ value, then where it's measured. Simple shows the
-  // pessimistic bound it renders (δ ≲ …), Realistic the true worst case
-  // (δ ≈ …); either way the beams/loads below sum to it.
+  // Header: the δ value, then where it's measured. The glyph distinguishes
+  // ≈ (true δ) from ≲ (pessimistic bound); either way the beams/loads below
+  // sum to it.
   const headline = document.createElement('div');
   headline.className = 'bd-headline';
   headline.textContent = `δ ${rows.glyph} ${formatMm(rows.deltaMax)}`;
@@ -100,7 +69,7 @@ export function renderBreakdown(
 
   // Beams section — before loads: "which beam to stiffen" is the actionable
   // question. Realistic per-mode values can be negative (a mode that opposes
-  // d*); Simple values are non-negative. The two bend modes carry an arrow
+  // d*); Scalar values are non-negative. The two bend modes carry an arrow
   // glyph for the two orthogonal bending planes; torsion is the plain word
   // "twist" — it has no chirality to point.
   if (rows.perBeam.length > 0) {
@@ -116,34 +85,13 @@ export function renderBreakdown(
     for (const b of rows.perBeam) {
       const name = document.createElement('span');
       name.textContent = `beam${b.beamIx}`;
-      const cells = [
+      grid.append(
         name,
         fracCell(fractionOf(b.bendIx, rows.deltaMax)),
         fracCell(fractionOf(b.bendIy, rows.deltaMax)),
         fracCell(fractionOf(b.torsionJ, rows.deltaMax)),
         fracCell(fractionOf(b.total, rows.deltaMax), true),
-      ];
-      // Simple mode: each cell is a hover target. Name and total cells stand
-      // for the whole beam (mode unset); the three frac cells for one mode.
-      if (mode === 'simple') {
-        const cellModes: (Mode | null)[] = [null, 'bendIx', 'bendIy', 'torsionJ', null];
-        cells.forEach((cell, i) => {
-          cell.classList.add('bd-hover');
-          cell.dataset['beam'] = String(b.beamIx);
-          const m = cellModes[i];
-          if (m) cell.dataset['mode'] = m;
-        });
-      }
-      grid.append(...cells);
-    }
-    if (mode === 'simple') {
-      grid.addEventListener('pointermove', (e) => {
-        const cell = (e.target as HTMLElement).closest('[data-beam]') as HTMLElement | null;
-        if (!cell) { onHover(null); return; }
-        const m = cell.dataset['mode'] as Mode | undefined;
-        onHover({ beamIx: Number(cell.dataset['beam']), mode: m ?? null });
-      });
-      grid.addEventListener('pointerleave', () => onHover(null));
+      );
     }
     el.appendChild(grid);
   }
@@ -218,7 +166,7 @@ function realisticRows(
 }
 
 // Scalar: each (beam, mode) part is independently maxed over its own d, then
-// summed. A looser pessimistic bound than Simple — Σ_{b,m} max ≥ max(Σ_{b,m}) —
+// summed. A pessimistic upper bound on the true δ — Σ_{b,m} max ≥ max(Σ_{b,m}) —
 // and direction-independent (no shared d).
 //
 // Per-load decomposition: at each (b, m)'s own argmax d*_{b,m},
@@ -248,26 +196,6 @@ function scalarRows(sel: DeflectionQueryResult): BreakdownRows {
     .sort(([a], [z]) => a - z)
     .map(([loadIx, delta_mm]) => ({ loadIx, delta_mm }));
   return { deltaMax, glyph: '≲', perBeam, perLoad };
-}
-
-// Simple: the pessimistic sum decomposed at its own argmax d_simple*. Every
-// part (per beam, per mode, per load) is evaluated at that one direction, so —
-// the sum being pointwise-exact — the parts sum exactly to the δ ≲ headline.
-// All non-negative: each isolated δ is a sum of F·|N·d|.
-function simpleRows(sel: DeflectionQueryResult): BreakdownRows {
-  const { dir: d, value: deltaMax } = displayDirectional(sel, 'simple').max();
-  return {
-    deltaMax,
-    glyph: '≲',
-    perBeam: sel.beamDeflections.map((b) => {
-      const at = (m: Mode) => b.byMode.find((x) => x.mode === m)?.deflection.at(d) ?? 0;
-      const bendIx = at('bendIx');
-      const bendIy = at('bendIy');
-      const torsionJ = at('torsionJ');
-      return { beamIx: b.beamIx, bendIx, bendIy, torsionJ, total: bendIx + bendIy + torsionJ };
-    }),
-    perLoad: sel.loadDeflections.map((l) => ({ loadIx: l.loadIx, delta_mm: l.deflection.at(d) })),
-  };
 }
 
 // Signed contribution of one mode along `dir` — 0 if the beam doesn't excite it.

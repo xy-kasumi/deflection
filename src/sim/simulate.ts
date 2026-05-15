@@ -1,7 +1,7 @@
 import type { DeflectionQuery, Problem, Vec3 } from './problem';
 import { buildCompliances } from './compliance';
 import type { Compliances, Mat3, Mode } from './compliance';
-import { directionalFor, beamDirectionals, loadDirectionals, type Directional } from './directional';
+import { directionalFor, beamDirectionals, type Directional } from './directional';
 
 export type SimOutcome = SimResult | SimError;
 
@@ -34,8 +34,6 @@ export interface DeflectionQueryResult {
   deflection: Directional;
   /** Per-beam (and per-mode) δ in isolation; do not sum to deflection. */
   beamDeflections: BeamDeflection[];
-  /** Per-load δ in isolation; do not sum to deflection. */
-  loadDeflections: LoadDeflection[];
   /** The per-load worst-case forces that realize δ toward `dir`. */
   forcesAt(dir: Vec3): Force[];
 }
@@ -55,12 +53,6 @@ export interface BeamDeflection {
      */
     perLoad: { loadIx: number; deflection: Directional }[];
   }[];
-}
-
-export interface LoadDeflection {
-  loadIx: number;
-  /** δ from this load alone (worst-cased independently). */
-  deflection: Directional;
 }
 
 export interface Force {
@@ -131,7 +123,6 @@ export function simulate(problem: Problem): SimOutcome {
       pos_mm: worldPos,
       deflection: directionalFor(compliances, queryIx),
       beamDeflections: beamDirectionals(compliances, queryIx),
-      loadDeflections: loadDirectionals(compliances, queryIx),
       forcesAt: (dir) => computeForces(compliances, queryIx, dir),
     });
   }
