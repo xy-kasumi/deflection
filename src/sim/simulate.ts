@@ -44,7 +44,17 @@ export interface BeamDeflection {
   beamIx: number;
   /** δ from this beam's compliance alone (worst-cased independently). */
   deflection: Directional;
-  byMode: { mode: Mode; deflection: Directional }[];
+  byMode: {
+    mode: Mode;
+    deflection: Directional;
+    /**
+     * The single-load, single-(beam, mode) δ_p(d) = F_p · |C_{b,m,p}^T d|. Used
+     * by Scalar mode to attribute its (b,m)-summed bound back to loads: at each
+     * (b,m)'s own argmax d*, F_p · |C_{b,m,p}^T d*| is load p's contribution.
+     * Sum over (b, m, p) of these equals the Scalar headline exactly.
+     */
+    perLoad: { loadIx: number; deflection: Directional }[];
+  }[];
 }
 
 export interface LoadDeflection {

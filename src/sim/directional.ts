@@ -90,6 +90,12 @@ export function beamDirectionals(c: Compliances, queryIx: number): BeamDeflectio
       byMode: [...b.perMode.entries()].map(([mode, m]) => ({
         mode,
         deflection: makeDirectional(termsOf(m, c)),
+        perLoad: [...m.entries()]
+          .sort(([a], [z]) => a - z)
+          .map(([loadIx, C]) => ({
+            loadIx,
+            deflection: makeDirectional([{ N: transpose(C), F: c.loadFmax_N[loadIx] ?? 0 }]),
+          })),
       })),
     }));
 }

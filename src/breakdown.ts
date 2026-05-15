@@ -219,18 +219,35 @@ function realisticRows(
 
 // Scalar: each (beam, mode) part is independently maxed over its own d, then
 // summed. A looser pessimistic bound than Simple — Σ_{b,m} max ≥ max(Σ_{b,m}) —
-// and direction-independent (no shared d). Loads section omitted: per-load
-// scalars decompose the bound differently and wouldn't sum to the (b,m) total.
+// and direction-independent (no shared d).
+//
+// Per-load decomposition: at each (b, m)'s own argmax d*_{b,m},
+//   δ_{b,m}(d*) = Σ_p F_p · |C_{b,m,p}^T d*_{b,m}|
+// so load p's contribution to the bound is Σ_{b,m} F_p · |C_{b,m,p}^T d*_{b,m}|
+// (a swap of sums). All non-negative; per-load and per-(b,m) sums both equal
+// the headline exactly.
 function scalarRows(sel: DeflectionQueryResult): BreakdownRows {
+  const perLoadMap = new Map<number, number>();
   const perBeam = sel.beamDeflections.map((b) => {
-    const at = (m: Mode) => b.byMode.find((x) => x.mode === m)?.deflection.max().value ?? 0;
+    const at = (mode: Mode) => {
+      const bm = b.byMode.find((x) => x.mode === mode);
+      if (!bm) return 0;
+      const { dir, value } = bm.deflection.max();
+      for (const pl of bm.perLoad) {
+        perLoadMap.set(pl.loadIx, (perLoadMap.get(pl.loadIx) ?? 0) + pl.deflection.at(dir));
+      }
+      return value;
+    };
     const bendIx = at('bendIx');
     const bendIy = at('bendIy');
     const torsionJ = at('torsionJ');
     return { beamIx: b.beamIx, bendIx, bendIy, torsionJ, total: bendIx + bendIy + torsionJ };
   });
   const deltaMax = perBeam.reduce((s, b) => s + b.total, 0);
-  return { deltaMax, glyph: '≲', perBeam, perLoad: [] };
+  const perLoad = [...perLoadMap.entries()]
+    .sort(([a], [z]) => a - z)
+    .map(([loadIx, delta_mm]) => ({ loadIx, delta_mm }));
+  return { deltaMax, glyph: '≲', perBeam, perLoad };
 }
 
 // Simple: the pessimistic sum decomposed at its own argmax d_simple*. Every
