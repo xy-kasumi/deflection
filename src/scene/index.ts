@@ -95,9 +95,10 @@ export class Scene {
     const avgL = beams.reduce((s, b) => s + b.length_mm, 0) / beams.length;
     const u = Math.max(1, avgL / 40);
 
-    const hitRadius   = u * VU.hitR;
-    const labelOffset = u * VU.labelOffset;
-    const lobeFloor   = u * VU.lobeFloorR;
+    const hitRadius      = u * VU.hitR;
+    const labelOffset    = u * VU.labelOffset;
+    const lobeFloor      = u * VU.lobeFloorR;
+    const hoverSegRadius = u * VU.hoverSegR;
 
     const chain = buildChain(beams, {
       supportKind,
@@ -114,7 +115,7 @@ export class Scene {
 
     if (sim && sim.queryResults.length > 0) {
       const r = this.lobes.buildFor(sim, beams, {
-        hitRadius, labelOffset, lobeFloor, selectedNodeIx, focused,
+        hitRadius, labelOffset, lobeFloor, hoverSegRadius, selectedNodeIx, focused,
       });
       for (const m of r.meshes) this.content.add(m);
       this.pickables.push(...r.pickables);
@@ -146,9 +147,13 @@ export class Scene {
   // total hover emits N_queries × 5 segments. apply() runs once so the
   // fresh meshes pick up the live δ-exag immediately.
   setHoverSegment(segs: HoverSegment[] | null): void {
-    this.lobes.setHover(segs);
-    this.lobes.apply(computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf));
-    this.refresh();
+    const kick = this.lobes.setHover(segs);
+    // Floating δ-labels (DOM, in front of canvas) would otherwise cover the
+    // contribution stick; cross-fade them out while it's on screen. CSS owns
+    // the label transition, so toggling the class once is enough.
+    this.labels.setFaded(!!segs && segs.length > 0);
+    if (kick) this.startAnim();
+    else this.refresh();
   }
 
   recommendDisplayScale(delta_max_mm: number): number {
@@ -230,6 +235,7 @@ export class Scene {
       }
 
       const scaleSettled = this.lobes.tickScale(dt);
+      const hoverSettled = this.lobes.tickHoverFade(dt);
       this.lobes.apply(computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf));
 
       this.refresh();
@@ -237,7 +243,8 @@ export class Scene {
       const settled = !this.dragging
         && this.yawVelocity === 0
         && Math.abs(this.targetYaw - this.yaw) < 1e-4
-        && scaleSettled;
+        && scaleSettled
+        && hoverSettled;
       if (settled) {
         this.animHandle = 0;
         return;

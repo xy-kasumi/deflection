@@ -32,6 +32,7 @@ export const VU = {
   walkerHintOffset: 5, // along walker-up
   labelOffset: 5,
   lobeFloorR: 0.75,    // underflow dia = 1.5u — just edges past the rod
+  hoverSegR: 0.4,      // contribution-segment dia = 0.8u — chunky enough to read past lobe shell and beam
 } as const;
 
 // Easing time-constants for the 1/τ form  alpha = 1 - exp(-dt * K).
@@ -44,6 +45,11 @@ export const MOTION = {
   dragStopVel: 0.1,
   scaleK: 18,
   scaleSettleLog: 1e-3,
+  // Hover overlay (contribution stick + matching label fade): τ ≈ 60ms;
+  // visible portion of the fade is ~180ms — fast enough to feel responsive,
+  // slow enough that the appear/disappear reads as a transition, not a snap.
+  hoverFadeK: 16,
+  hoverFadeSettle: 1e-3,
 } as const;
 
 // Convert a 0xRRGGBB color token to GLSL `vec3(r, g, b)` literal text.

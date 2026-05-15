@@ -59,14 +59,34 @@ const scene = new Scene(canvas, (nodeIx) => {
   redraw();
 });
 
+// Debounce window for cell-to-cell hover travel. The CSS column-gap between
+// breakdown cells means the cursor crosses a few px of "no cell" between
+// neighbors; without a grace period the label cross-fade flickers
+// (out → halfway → back in). Long enough to swallow the gap, short enough
+// that an intentional leave still feels prompt.
+const HOVER_LEAVE_GRACE_MS = 100;
+let hoverLeaveTimer: number | null = null;
+
+function cancelHoverLeave(): void {
+  if (hoverLeaveTimer !== null) {
+    clearTimeout(hoverLeaveTimer);
+    hoverLeaveTimer = null;
+  }
+}
+
 const hoverHandlers: HoverHandlers = {
   enter(keys) {
+    cancelHoverLeave();
     hoverKeys = keys;
     scene.setHoverSegment(computeHoverSegments());
   },
   leave() {
-    hoverKeys = null;
-    scene.setHoverSegment(null);
+    cancelHoverLeave();
+    hoverLeaveTimer = window.setTimeout(() => {
+      hoverLeaveTimer = null;
+      hoverKeys = null;
+      scene.setHoverSegment(null);
+    }, HOVER_LEAVE_GRACE_MS);
   },
 };
 
@@ -140,7 +160,9 @@ function redrawBreakdown() {
   if (!last) return;
   // The breakdown DOM is wiped & replaced below; old cells' mouseleave won't
   // fire on detached elements. Reset hover ourselves; mouseenter on new cells
-  // re-establishes it.
+  // re-establishes it. Cancel any pending leave-debounce too, otherwise the
+  // timer would fire post-rebuild and clobber a fresh hover.
+  cancelHoverLeave();
   hoverKeys = null;
   scene.setHoverSegment(null);
   const { ls, out } = last;

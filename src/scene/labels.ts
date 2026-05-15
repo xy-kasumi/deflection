@@ -37,6 +37,15 @@ export class Labels {
   clear(): void {
     for (const e of this.entries) e.el.remove();
     this.entries = [];
+    // Don't carry a transient hover-driven fade across a rebuild.
+    this.layer.classList.remove('faded');
+  }
+
+  // Temporary hide for all labels (e.g. while a contribution segment is on
+  // screen and the δ-text would occlude it). Toggles a class on the layer
+  // so the per-label classes (selected/hidden) are untouched.
+  setFaded(faded: boolean): void {
+    this.layer.classList.toggle('faded', faded);
   }
 
   update(camera: THREE.Camera, canvas: HTMLCanvasElement): void {
