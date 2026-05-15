@@ -317,5 +317,94 @@ function singleCantilever(): Problem {
   }
 }
 
+// ---- Test 9: load/query around a T-junction (segment-walk LCA coverage) ----
+// Same mid-attached geometry as Test 7 (beam0 horz L=300, beam1 right at
+// offset 100, L=100). Three sub-cases pin the LCA walk in each direction:
+//   A: load on trunk past the junction; query on trunk past the junction.
+//      Single-cantilever exact (the junction is irrelevant — both seg_a and
+//      seg_b on the load path contribute).
+//   B: load on trunk past the junction; query on the branch tip.
+//      Only seg_a (beam0[0..junction]) on the common path; load enters its
+//      tip with the cascaded (F, M = arm × F).
+//   C: load on the branch tip; query on the trunk past the junction.
+//      Reciprocal of B — same magnitude by Maxwell-Betti.
+{
+  console.log('\n-- Test 9: load/query around a T-junction --');
+  const L0 = 300, Lattach = 100, L1 = 100;
+  const beam1: Beam = {
+    frame: {
+      origin_mm: [Lattach, 0, 0],
+      ex: [1, 0, 0], ey: [0, 1, 0], axial: [0, 0, 1],
+    },
+    length_mm: L1,
+    section: RECT_10,
+    material: STEEL,
+  };
+  const mkProblem = (
+    loadAt: { beamIx: number; offset_mm: number },
+    queryAt: { beamIx: number; offset_mm: number },
+  ): Problem => ({
+    beams: [horzBeam([0, 0, 0], L0), beam1],
+    loads: [{ ...loadAt, Fmax_N: 1 }],
+    queries: [queryAt],
+    support: 'single',
+  });
+
+  // --- A: trunk past junction → trunk past junction (same beam) ---
+  // Load at s=200, query at s=250. Single cantilever along beam0:
+  //   u_y(s_eval) = (F·s_load³/3 + F·s_load²/2 · (s_eval - s_load)) / EIx
+  //              = (200³/3 + 200²/2 · 50) / EIx  =  11e6/3 / EIx.
+  {
+    const c = buildCompliances(mkProblem(
+      { beamIx: 0, offset_mm: 200 },
+      { beamIx: 0, offset_mm: 250 },
+    ));
+    if ('kind' in c) expect('A: buildCompliances ok', false);
+    else {
+      const C = c.totals.find((t) => t.queryIx === 0 && t.loadIx === 0)!.C;
+      const expY = 11e6 / 3 / EIx;
+      check('A: trunk→trunk past junction, C[uy←F_y]', C[4]!, expY, 1e-9);
+    }
+  }
+
+  // --- B: trunk past junction → branch tip ---
+  // Common chain = [seg_a (beam0[0..100])]. At seg_a's tip: F_world=+Y,
+  // M_world = (loadPos - tipPos) × F = (100,0,0)×(0,1,0) = (0,0,100), which
+  // in beam0-local is M_x=-100 (RHR). modeBendIx with F_y=1, M_x=-100, L=100:
+  //   u_y_local = (1·100²·200/6 + (-1)·(-100)·100²/2)/EIx = 5e6/6 / EIx.
+  // arm from seg_a.tip to query (beam1.tip = (100,0,100)) = (0,0,100);
+  // rot_world × arm = 0 (collinear). So u_y_world = 5e6/6 / EIx.
+  {
+    const c = buildCompliances(mkProblem(
+      { beamIx: 0, offset_mm: 200 },
+      { beamIx: 1, offset_mm: L1 },
+    ));
+    if ('kind' in c) expect('B: buildCompliances ok', false);
+    else {
+      const C = c.totals.find((t) => t.queryIx === 0 && t.loadIx === 0)!.C;
+      const expY = 5e6 / 6 / EIx;
+      check('B: trunk→branch, C[uy←F_y]', C[4]!, expY, 1e-9);
+    }
+  }
+
+  // --- C: branch tip → trunk past junction ---
+  // Reciprocal of B: same scalar by Maxwell-Betti symmetry of the compliance.
+  // Mechanism is different (seg_a sees the load via arm (0,0,100), producing
+  // a twist on beam0 plus a transverse force; the y-translation contribution
+  // is the same magnitude as B by reciprocity).
+  {
+    const c = buildCompliances(mkProblem(
+      { beamIx: 1, offset_mm: L1 },
+      { beamIx: 0, offset_mm: 200 },
+    ));
+    if ('kind' in c) expect('C: buildCompliances ok', false);
+    else {
+      const C = c.totals.find((t) => t.queryIx === 0 && t.loadIx === 0)!.C;
+      const expY = 5e6 / 6 / EIx;
+      check('C: branch→trunk, C[uy←F_y]', C[4]!, expY, 1e-9);
+    }
+  }
+}
+
 console.log(failed ? '\nSMOKE FAILED' : '\nsmoke ok');
 process.exitCode = failed ? 1 : 0;
