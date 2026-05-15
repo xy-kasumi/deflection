@@ -259,6 +259,7 @@ function loadMagnitudeN(att: Attachment): number {
   const unit = p.quantity.unit ?? 'kgf';
   if (unit === 'N') return v;
   if (unit === 'kgf') return v * KGF_TO_N;
+  if (unit === 'gf') return v * 1e-3 * KGF_TO_N;
   return v * KGF_TO_N;
 }
 

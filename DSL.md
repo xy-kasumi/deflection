@@ -36,7 +36,7 @@ QUANTITY = [ PREFIX ] NUMBER [ UNIT ] (* no space in-between *)
 PREFIX = /[A-Z][A-Za-z]*/
 NUMBER = (* floating point number *)
 UNIT
-  = "N" | "kgf"
+  = "N" | "kgf" | "gf"
   | "mm4"
   | "N/mm"
   | "G" | "m/s2" | ...

@@ -255,10 +255,15 @@ function checkAttachment(a: Attachment, diags: Diagnostic[]) {
         span: p.span,
       });
     }
-    if (p.quantity.unit && p.quantity.unit !== 'kgf' && p.quantity.unit !== 'N') {
+    if (
+      p.quantity.unit &&
+      p.quantity.unit !== 'kgf' &&
+      p.quantity.unit !== 'gf' &&
+      p.quantity.unit !== 'N'
+    ) {
       diags.push({
         severity: 'warning',
-        message: `unknown unit '${p.quantity.unit}' on load (expected kgf or N)`,
+        message: `unknown unit '${p.quantity.unit}' on load (expected kgf, gf, or N)`,
         span: p.span,
       });
     }
