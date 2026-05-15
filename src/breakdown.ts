@@ -93,8 +93,8 @@ export function renderBreakdown(
   const headline = document.createElement('div');
   headline.className = 'bd-headline';
   headline.textContent =
-    `δ ≈ ${formatMm(sel.deflection_mm.max().value)}` +
-    `    δθ ≈ ${formatAngle(sel.rotation_rad.max().value)}`;
+    `δ ≈ ${formatMm(sel.deflection_mm.furthest().distance)}` +
+    `    δθ ≈ ${formatAngle(sel.rotation_rad.furthest().distance)}`;
   el.appendChild(headline);
 
   const subhead = document.createElement('div');
@@ -213,16 +213,19 @@ export function renderBreakdown(
 function decompose(sel: DeflectionQueryResult): BreakdownRows {
   const perLoadMap = new Map<number, number>();
   const perBeam = sel.beamDeflections.map((b) => {
-    // Each sub-mode is rank-1, so max() returns its single argmax direction
-    // and magnitude. Per-load attribution evaluates at that argmax.
+    // Each sub-mode is rank-1, so furthest() returns its single furthest-point
+    // and distance. Per-load attribution evaluates support at that point.
     const at = (mode: Mode): number => {
       const bm = b.byMode.find((x) => x.mode === mode);
       if (!bm) return 0;
-      const { dir_unit, value } = bm.deflection_mm.max();
+      const { point, distance } = bm.deflection_mm.furthest();
+      if (distance === 0) return 0;
+      const inv = 1 / distance;
+      const d: [number, number, number] = [point[0] * inv, point[1] * inv, point[2] * inv];
       for (const pl of bm.perLoad) {
-        perLoadMap.set(pl.loadIx, (perLoadMap.get(pl.loadIx) ?? 0) + pl.deflection_mm.at(dir_unit));
+        perLoadMap.set(pl.loadIx, (perLoadMap.get(pl.loadIx) ?? 0) + pl.deflection_mm.support(d));
       }
-      return value;
+      return distance;
     };
     const bendIxTrans = at('bendIxTrans');
     const bendIxRot   = at('bendIxRot');

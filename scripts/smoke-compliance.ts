@@ -117,22 +117,36 @@ function singleCantilever(): Problem {
   } else {
     const q = out.queryResults[0]!;
     const expBend = (KGF_TO_N * L ** 3) / (3 * EIx);
-    check('δ(+y) = F·L³/(3·E·Ix)', q.deflection_mm.at([0, 1, 0]), expBend);
-    checkNear0('δ(+x) = 0 (axially rigid)', q.deflection_mm.at([1, 0, 0]));
-    const { dir_unit, value } = q.deflection_mm.max();
-    check('δ_max = F·L³/(3·E·Ix)', value, expBend);
-    expect('d* lies in the YZ plane (chord is rigid)', Math.abs(dir_unit[0]) < 1e-3);
+    check('δ(+y) = F·L³/(3·E·Ix)', q.deflection_mm.support([0, 1, 0]), expBend);
+    checkNear0('δ(+x) = 0 (axially rigid)', q.deflection_mm.support([1, 0, 0]));
+    const { point, distance } = q.deflection_mm.furthest();
+    check('δ_max = F·L³/(3·E·Ix)', distance, expBend);
+    expect('d* lies in the YZ plane (chord is rigid)', Math.abs(point[0]) < 1e-3 * distance);
+    const inv = 1 / distance;
+    const dStar: Vec3 = [point[0] * inv, point[1] * inv, point[2] * inv];
+
+    // boundary(d*) is the surface point with outer normal d*. At the
+    // argmax direction this point equals furthest().point exactly
+    // (the supporting hyperplane is tangent to K at the furthest point).
+    const bdy = q.deflection_mm.boundary(dStar);
+    check('|boundary(d*)| = δ_max', Math.hypot(bdy[0], bdy[1], bdy[2]), distance, 1e-9);
+    expect(
+      'boundary(d*) = furthest().point',
+      Math.abs(bdy[0] - point[0]) +
+      Math.abs(bdy[1] - point[1]) +
+      Math.abs(bdy[2] - point[2]) < 1e-9 * distance + 1e-12,
+    );
 
     // δ_max decomposition invariants. At a single direction d*, summing the
-    // single-load Directionals over all (b, m, p) must reproduce δ(d*) =
-    // δ_max exactly (linear support function in F).
+    // single-load envelopes' support over all (b, m, p) must reproduce
+    // δ(d*) = δ_max exactly (linear support function in F).
     let perBeamSum = 0, perLoadSum = 0;
     const perLoad = new Map<number, number>();
     for (const b of q.beamDeflections) {
       let bsum = 0;
       for (const bm of b.byMode) {
         for (const pl of bm.perLoad) {
-          const v = pl.deflection_mm.at(dir_unit);
+          const v = pl.deflection_mm.support(dStar);
           bsum += v;
           perLoad.set(pl.loadIx, (perLoad.get(pl.loadIx) ?? 0) + v);
         }
@@ -140,8 +154,8 @@ function singleCantilever(): Problem {
       perBeamSum += bsum;
     }
     for (const v of perLoad.values()) perLoadSum += v;
-    check('Σ_(b,m,p) F·|C^T d*| = δ_max (by beam)', perBeamSum, value, 1e-9);
-    check('Σ_(b,m,p) F·|C^T d*| = δ_max (by load)', perLoadSum, value, 1e-9);
+    check('Σ_(b,m,p) F·|C^T d*| = δ_max (by beam)', perBeamSum, distance, 1e-9);
+    check('Σ_(b,m,p) F·|C^T d*| = δ_max (by load)', perLoadSum, distance, 1e-9);
   }
 }
 
@@ -156,7 +170,7 @@ function singleCantilever(): Problem {
     expect('1 beam in beamDeflections', q.beamDeflections.length === 1);
     const b = q.beamDeflections[0]!;
     const at_y = (m: Mode): number =>
-      b.byMode.find((x) => x.mode === m)?.deflection_mm.at([0, 1, 0]) ?? 0;
+      b.byMode.find((x) => x.mode === m)?.deflection_mm.support([0, 1, 0]) ?? 0;
     const expBend = (KGF_TO_N * L ** 3) / (3 * EIx);
     check('bendIxTrans @ d=+y = F·L³/(3·E·Ix)', at_y('bendIxTrans'), expBend);
     checkNear0('bendIyTrans @ d=+y = 0', at_y('bendIyTrans'));

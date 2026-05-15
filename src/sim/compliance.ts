@@ -64,7 +64,7 @@ export interface Compliances {
   /**
    * Rotation compliance C_rot[q][p]: world-frame 3×3 mapping a unit world
    * force at load p to a linearized world-frame rotation vector at query q.
-   * Used to build a parallel Directional for δθ_q (rotation worst-case),
+   * Used to build a parallel ConvexEnvelope for δθ_q (rotation worst-case),
    * exposed alongside δ_q. Not decomposed per (b, m) — δθ is reported only
    * as a headline; bend-rotation contributions to *translation* still show
    * up in the per-(b, m) decomposition via the rotation × arm path.
@@ -128,7 +128,7 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
   // sparse-Map shape as totalsMap. Each entry is a world-frame 3×3 mapping
   // unit world force/moment input at load p to linearized world rotation
   // vector at query q. Surfaced publicly as `rotationTotals` so consumers
-  // can build a Directional for δθ. The fixed-fixed compatibility solve
+  // can build a ConvexEnvelope for δθ. The fixed-fixed compatibility solve
   // reads its `clampRot` rows from this same store.
   const rotMap = new Map<string, Mat3>();
 

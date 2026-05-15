@@ -1,7 +1,7 @@
 import type { DeflectionQuery, Problem } from './problem';
 import { buildCompliances } from './compliance';
 import type { Compliances, Mode } from './compliance';
-import { makeDirectional, type Directional, type Vec3, type Mat3 } from './math';
+import { makeConvexEnvelope, type ConvexEnvelope, type Vec3, type Mat3 } from './math';
 
 export type SimOutcome = SimResult | SimError;
 
@@ -26,10 +26,10 @@ export interface DeflectionQueryResult {
   query: DeflectionQuery;
   /** Undeformed position. */
   pos_mm: Vec3;
-  /** Translation worst-case distribution; .at/.max/.sample values are mm. */
-  deflection_mm: Directional;
-  /** Rotation worst-case distribution; .at/.max/.sample values are rad. */
-  rotation_rad: Directional;
+  /** Set of possible translation-deflection vectors at this query (mm). */
+  deflection_mm: ConvexEnvelope;
+  /** Set of possible linearized rotation vectors at this query (rad). */
+  rotation_rad: ConvexEnvelope;
   /** Per-beam (and per-mode) δ in isolation; do not sum to deflection_mm. */
   beamDeflections: BeamDeflection[];
 }
@@ -38,49 +38,49 @@ export interface BeamDeflection {
   beamIx: number;
   byMode: {
     mode: Mode;
-    /** δ from this beam/mode in isolation; .at/.max values are mm. */
-    deflection_mm: Directional;
+    /** δ from this beam/mode in isolation (mm). */
+    deflection_mm: ConvexEnvelope;
     /**
-     * Single-load, single-(beam, mode) δ_p(d) = F_p · |C_{b,m,p}^T d|. Lets a
-     * caller attribute the (b, m)-summed pessimistic bound back to loads: at
-     * each (b, m)'s argmax d*, F_p · |C_{b,m,p}^T d*| is load p's share, and
+     * Single-load, single-(beam, mode) envelope. Lets a caller attribute the
+     * (b, m)-summed pessimistic bound back to loads: at each (b, m)'s
+     * furthest direction d*, each load's `support(d*)` is its share, and
      * Σ_{b, m, p} of those equals the bound. Values are mm.
      */
-    perLoad: { loadIx: number; deflection_mm: Directional }[];
+    perLoad: { loadIx: number; deflection_mm: ConvexEnvelope }[];
   }[];
 }
 
-/** Build a Directional for query q from whole-structure compliance totals. */
-function directionalFor(c: Compliances, queryIx: number): Directional {
+/**
+ * Translation-deflection envelope for query q. Each per-load compliance Cₚ
+ * is scaled by F_max,p to form an ellipsoid shape matrix; the envelope is
+ * their Minkowski sum.
+ */
+function deflectionEnvelopeFor(c: Compliances, queryIx: number): ConvexEnvelope {
   const ts: Mat3[] = [];
   for (const t of c.totals) {
     if (t.queryIx !== queryIx) continue;
-    ts.push(scaleMat(transpose(t.C), c.loadFmax_N[t.loadIx] ?? 0));
+    ts.push(scaleMat(t.C, c.loadFmax_N[t.loadIx] ?? 0));
   }
-  return makeDirectional(ts);
+  return makeConvexEnvelope(ts);
 }
 
-/**
- * Rotation Directional at query q from whole-structure rotation totals. d is
- * a unit rotation axis; the returned value is the linearized worst-case
- * rotation magnitude about that axis (rad).
- */
-function rotationFor(c: Compliances, queryIx: number): Directional {
+/** Linearized rotation envelope for query q (rad). */
+function rotationEnvelopeFor(c: Compliances, queryIx: number): ConvexEnvelope {
   const ts: Mat3[] = [];
   for (const t of c.rotationTotals) {
     if (t.queryIx !== queryIx) continue;
-    ts.push(scaleMat(transpose(t.C), c.loadFmax_N[t.loadIx] ?? 0));
+    ts.push(scaleMat(t.C, c.loadFmax_N[t.loadIx] ?? 0));
   }
-  return makeDirectional(ts);
+  return makeConvexEnvelope(ts);
 }
 
 /**
- * Per-(beam, mode) Directionals at query q, worst-cased independently. These
+ * Per-(beam, mode) envelopes at query q, worst-cased independently. These
  * do NOT sum to the whole-structure δ_q (Σ ≥ δ, triangle inequality); each is
- * honest only on its own. Per-mode `perLoad` keeps single-load Directionals
- * so callers can attribute the (b, m) argmax back to loads.
+ * honest only on its own. Per-mode `perLoad` keeps single-load envelopes so
+ * callers can attribute the (b, m) furthest-point back to loads.
  */
-function beamDirectionals(c: Compliances, queryIx: number): BeamDeflection[] {
+function beamEnvelopes(c: Compliances, queryIx: number): BeamDeflection[] {
   const byBeam = new Map<number, Map<Mode, Map<number, Mat3>>>();
   for (const e of c.entries) {
     if (e.queryIx !== queryIx) continue;
@@ -97,15 +97,15 @@ function beamDirectionals(c: Compliances, queryIx: number): BeamDeflection[] {
       beamIx,
       byMode: [...perMode.entries()].map(([mode, m]) => {
         const sorted = [...m.entries()].sort(([a], [z]) => a - z);
-        const terms = sorted.map(([loadIx, C]) =>
-          scaleMat(transpose(C), c.loadFmax_N[loadIx] ?? 0),
+        const ts = sorted.map(([loadIx, C]) =>
+          scaleMat(C, c.loadFmax_N[loadIx] ?? 0),
         );
         return {
           mode,
-          deflection_mm: makeDirectional(terms),
+          deflection_mm: makeConvexEnvelope(ts),
           perLoad: sorted.map(([loadIx], i) => ({
             loadIx,
-            deflection_mm: makeDirectional([terms[i]!]),
+            deflection_mm: makeConvexEnvelope([ts[i]!]),
           })),
         };
       }),
@@ -117,10 +117,6 @@ function accumMat(m: Map<number, Mat3>, loadIx: number, C: Mat3): void {
   let cur = m.get(loadIx);
   if (!cur) { cur = [0, 0, 0, 0, 0, 0, 0, 0, 0]; m.set(loadIx, cur); }
   for (let i = 0; i < 9; i++) (cur[i] as number) += C[i] as number;
-}
-
-function transpose(M: Mat3): Mat3 {
-  return [M[0], M[3], M[6], M[1], M[4], M[7], M[2], M[5], M[8]];
 }
 
 function scaleMat(M: Mat3, s: number): Mat3 {
@@ -164,9 +160,9 @@ export function simulate(problem: Problem): SimOutcome {
       queryIx,
       query,
       pos_mm: worldPos,
-      deflection_mm: directionalFor(compliances, queryIx),
-      rotation_rad: rotationFor(compliances, queryIx),
-      beamDeflections: beamDirectionals(compliances, queryIx),
+      deflection_mm: deflectionEnvelopeFor(compliances, queryIx),
+      rotation_rad: rotationEnvelopeFor(compliances, queryIx),
+      beamDeflections: beamEnvelopes(compliances, queryIx),
     });
   }
 

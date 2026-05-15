@@ -50,7 +50,7 @@ const scene = new Scene(canvas, (nodeIx) => {
   // Auto-pick the biggest non-overflown δ-exag for this node so a click is
   // also a "show me this node clearly" gesture. Initial tip selection stays
   // at ×1 (this callback only fires on user picks, not on default-select).
-  const recommended = scene.recommendDisplayScale(n.deflection_mm.max().value);
+  const recommended = scene.recommendDisplayScale(n.deflection_mm.furthest().distance);
   if (recommended !== currentScale) {
     currentScale = recommended;
     updateScaleButtons();
@@ -103,11 +103,11 @@ function computeSticks(): Stick[] | null {
       if (!bd) continue;
       const bm = bd.byMode.find((m) => m.mode === key.mode);
       if (!bm) continue;
-      const { dir_unit, value } = bm.deflection_mm.max();
-      if (value === 0) continue;
+      const { point, distance } = bm.deflection_mm.furthest();
+      if (distance === 0) continue;
       sticks.push({
         origin_mm: node.pos_mm,
-        vector_mm: [dir_unit[0] * value, dir_unit[1] * value, dir_unit[2] * value],
+        vector_mm: point,
       });
     }
   }
@@ -158,7 +158,7 @@ function render(opts?: { autoRescale?: boolean }) {
     const selectedNodeIx = resolveSelectedNodeIx(lastSim, ls.tipQueryIx);
     const node = lastSim.queryResults[selectedNodeIx];
     if (node) {
-      const recommended = scene.recommendDisplayScale(node.deflection_mm.max().value);
+      const recommended = scene.recommendDisplayScale(node.deflection_mm.furthest().distance);
       if (recommended !== currentScale) {
         currentScale = recommended;
         updateScaleButtons();

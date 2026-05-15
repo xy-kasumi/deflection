@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
-import { evaluate, capTermsForUniform, type Directional } from '../sim/math';
+import { boundaryFromTerms, capEllipsoidsForUniform, type ConvexEnvelope } from '../sim/math';
 import { formatMm } from '../breakdown';
 import { COLOR, MOTION, easeToward, hexToVec3 } from './tokens';
 
@@ -20,10 +20,15 @@ const LOBE_DETAIL = 20;
 // many mat3 uniforms; bumping if a future scene needs more is a one-line edit.
 const MAX_LOADS = 16;
 
-// Per-vertex CPU spot-check: K randomly chosen vertices carry a CPU-computed
-// δ, the shader writes 1.0 into vDiscrep when its own δ differs by more than
-// SPOTCHECK_TOL_REL relative. Fragment shader paints those vertices solid
-// magenta — bright halos = shader/CPU disagree, see [[evaluate]] in math.ts.
+// Per-vertex CPU spot-check: K randomly chosen vertices carry the CPU-computed
+// boundary vector; the shader writes 1.0 into vDiscrep when its own boundary
+// differs by more than SPOTCHECK_TOL_REL · dMax in vector L2. Fragment shader
+// paints those vertices solid magenta — bright halos = shader/CPU disagree,
+// see [[boundaryFromTerms]] in math.ts.
+//
+// Vector comparison (not magnitude alone) catches direction errors too: a
+// shader that computed the right radius along the wrong axis would otherwise
+// pass a scalar check.
 //
 // K random (not strided) so the icosphere's 20-fold symmetry can't accidentally
 // align with sample placement. Density target: ~14° mean spacing on S² — dense
@@ -33,7 +38,7 @@ const SPOTCHECK_TOL_REL = 0.01;
 
 // Sphere-fallback threshold — δ_min/δ_max above this and the lobe is nearly
 // isotropic. The shader, told via uniform, skips cap-painting and renders a
-// uniform shell. Computed CPU-side from `directional.sample()`.
+// uniform shell. Computed CPU-side from a coarse S² sweep of `support()`.
 const LOBE_ISOTROPIC_RATIO = LOBE_CAP_LO;
 
 // Overflow trigger: the konpeito (lobe-too-big) state begins when the lobe
@@ -55,37 +60,49 @@ const LOBE_KONPEITO_FRAC  = 0.5;
 // non-overflown by iterating once.
 const DISPLAY_SCALES = [1, 10, 100, 1000] as const;
 
-// Vertex shader — GLSL TWIN of `evaluate(d_unit, terms)` in src/sim/math.ts.
-// Must stay in sync; the cpuDelta attribute carries CPU truth at K_SPOTCHECK
-// random vertices and the fragment shader halo-paints any per-vertex divergence.
+// Vertex shader — GLSL TWIN of `boundaryFromTerms(d_unit, ellipsoidMats)` in
+// src/sim/math.ts. Must stay in sync; cpuBoundary carries CPU truth at
+// K_SPOTCHECK random vertices and the fragment shader halo-paints any
+// per-vertex divergence.
 //
 // Mesh is positioned at the node's world origin with identity rotation, so
-// `position` (mesh-local) equals the world-frame direction d. The shader
-// scales position radially by δ(d); modelViewMatrix translates the deformed
-// vertex to its world location.
+// `position` (mesh-local) equals the unit direction d on S². The shader
+// replaces position with boundary(d) = Σ Mᵢ · normalize(Mᵢᵀd) — the surface
+// point of K with outward normal d. The resulting vertex traces ∂K, not the
+// radial graph of the support function.
+//
+// `d * Ms[i]` in GLSL is row-vec × mat = (Msᵀ · d)ᵀ; the GLSL `Ms[i] *` then
+// gives M · (Mᵀd / |Mᵀd|), matching the CPU formula.
+//
+// vT = |boundary(d)| / dMax in [0, 1]; the fragment shader caps where vT is
+// close to 1 — i.e. at the actual furthest points on ∂K.
 const LOBE_VS = `
 precision highp float;
 uniform mat3 Ms[${MAX_LOADS}];
 uniform int nLoads;
 uniform float dMaxInv;
-attribute float cpuDelta;
+attribute vec3 cpuBoundary;
+attribute float cpuCheck;
 varying float vT;
 varying float vDiscrep;
 void main() {
   vec3 d = normalize(position);
-  float deltaSh = 0.0;
+  vec3 bdy = vec3(0.0);
   for (int i = 0; i < ${MAX_LOADS}; i++) {
     if (i >= nLoads) break;
-    deltaSh += length(Ms[i] * d);
+    vec3 v = d * Ms[i];
+    float mag = length(v);
+    if (mag > 1e-30) {
+      bdy += Ms[i] * (v / mag);
+    }
   }
-  vT = deltaSh * dMaxInv;
+  vT = length(bdy) * dMaxInv;
   vDiscrep = 0.0;
-  if (cpuDelta >= 0.0) {
-    float rel = abs(deltaSh - cpuDelta) / max(deltaSh, 1e-6);
-    if (rel > ${SPOTCHECK_TOL_REL}) vDiscrep = 1.0;
+  if (cpuCheck > 0.5) {
+    float relErr = length(bdy - cpuBoundary) * dMaxInv;
+    if (relErr > ${SPOTCHECK_TOL_REL}) vDiscrep = 1.0;
   }
-  vec3 deformed = d * deltaSh;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(deformed, 1.0);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(bdy, 1.0);
 }
 `;
 
@@ -246,7 +263,7 @@ export class LobeRenderer {
       const worldPos = new THREE.Vector3(...n.pos_mm);
 
       const lobeDir = n.deflection_mm;
-      const delta_max_mm = lobeDir.max().value;
+      const delta_max_mm = lobeDir.furthest().distance;
 
       // All three states are built up-front. The per-frame tick scales/fades
       // them according to the animated δ-exag; categorical state-switching is
@@ -390,7 +407,7 @@ export function computeLobeCeilWorld(canvas: HTMLCanvasElement, scaleHalf: numbe
 // Geometry: shares SHARED_POS_ATTR (one upload per page) plus a per-lobe
 // cpuDelta attribute carrying CPU truth at K_SPOTCHECK random vertices. Any
 // shader-CPU disagreement halo-paints those vertices magenta — see the LOBE_VS
-// header for the contract with evaluate() in math.ts.
+// header for the contract with supportFromTerms() in math.ts.
 //
 // Built at unit δ-exag: the shader's radial deformation equals δ in mm. The
 // caller drives mesh.scale to apply the animated δ-exag.
@@ -399,45 +416,60 @@ export function computeLobeCeilWorld(canvas: HTMLCanvasElement, scaleHalf: numbe
 // directional sample, the fragment shader's isIsotropic uniform suppresses
 // cap painting and the lobe renders as a uniform shell — same affordance as
 // the underflow sphere, just at the lobe's natural size.
-function buildNormalLobe(dir: Directional, reuseMat?: THREE.ShaderMaterial): THREE.Mesh {
-  const terms = capTermsForUniform(dir.terms, MAX_LOADS);
-  const nLoads = Math.min(terms.length, MAX_LOADS);
-  const dMax = dir.max().value;
+function buildNormalLobe(dir: ConvexEnvelope, reuseMat?: THREE.ShaderMaterial): THREE.Mesh {
+  const ellipsoidMats = capEllipsoidsForUniform(dir.ellipsoidMats, MAX_LOADS);
+  const nLoads = Math.min(ellipsoidMats.length, MAX_LOADS);
+  const dMax = dir.furthest().distance;
   const dMaxInv = dMax > 0 ? 1 / dMax : 0;
 
+  // Coarse Fibonacci-spiral sample of the support function on S² to detect
+  // near-isotropy. Off the type's API by design — generic S² sampling has
+  // nothing to do with the envelope's internals.
   let dMin = dMax;
-  for (const s of dir.sample(24)) if (s.value < dMin) dMin = s.value;
+  const N_ISOTROPY = 24;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < N_ISOTROPY; i++) {
+    const z = 1 - (2 * (i + 0.5)) / N_ISOTROPY;
+    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    const phi = golden * i;
+    const v = dir.support([r * Math.cos(phi), r * Math.sin(phi), z]);
+    if (v < dMin) dMin = v;
+  }
   const isIsotropic = dMax > 0 && dMin / dMax > LOBE_ISOTROPIC_RATIO;
 
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', SHARED_POS_ATTR);
-  const cpu = new Float32Array(SHARED_POS_ATTR.count);
-  cpu.fill(-1);
+  const cpuBoundary = new Float32Array(SHARED_POS_ATTR.count * 3);
+  const cpuCheck = new Float32Array(SHARED_POS_ATTR.count);
   for (const idx of SPOTCHECK_INDICES) {
     const d: Vec3 = [
       SHARED_POS_ATTR.getX(idx),
       SHARED_POS_ATTR.getY(idx),
       SHARED_POS_ATTR.getZ(idx),
     ];
-    cpu[idx] = evaluate(d, terms);
+    const b = boundaryFromTerms(d, ellipsoidMats);
+    cpuBoundary[idx * 3 + 0] = b[0];
+    cpuBoundary[idx * 3 + 1] = b[1];
+    cpuBoundary[idx * 3 + 2] = b[2];
+    cpuCheck[idx] = 1;
   }
-  geom.setAttribute('cpuDelta', new THREE.BufferAttribute(cpu, 1));
-  // Positions are unit-radius; shader scales radially by δ ≤ dMax. Use dMax
-  // for frustum culling so the (shader-deformed) extent stays correct.
+  geom.setAttribute('cpuBoundary', new THREE.BufferAttribute(cpuBoundary, 3));
+  geom.setAttribute('cpuCheck', new THREE.BufferAttribute(cpuCheck, 1));
+  // Surface vertices lie on ∂K; |boundary(d)| ≤ dMax for any d. Use dMax for
+  // frustum culling so the (shader-deformed) extent stays correct.
   geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), dMax || 1);
 
   // Pack M matrices into the uniform array. THREE.Matrix3.set takes row-major
-  // args, matching how Mat3 is laid out in math.ts; the GLSL `Ms[i] * d`
-  // multiply then gives M·d in the same sense as the CPU's matVec(M, d).
-  // Unused slots are zeroed so a stale shader iteration (if any) sees no
-  // contribution.
+  // args, matching how Mat3 is laid out in math.ts. The shader's
+  // `Ms[i] * normalize(d * Ms[i])` mirrors boundaryFromTerms. Unused slots
+  // are zeroed so a stale shader iteration (if any) sees no contribution.
   let mat: THREE.ShaderMaterial;
   if (reuseMat) {
     mat = reuseMat;
     const MsArr = mat.uniforms['Ms']!.value as THREE.Matrix3[];
     for (let i = 0; i < MAX_LOADS; i++) {
       if (i < nLoads) {
-        const M = terms[i]!;
+        const M = ellipsoidMats[i]!;
         MsArr[i]!.set(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7], M[8]);
       } else {
         MsArr[i]!.set(0, 0, 0, 0, 0, 0, 0, 0, 0);
@@ -451,7 +483,7 @@ function buildNormalLobe(dir: Directional, reuseMat?: THREE.ShaderMaterial): THR
     for (let i = 0; i < MAX_LOADS; i++) {
       const m = new THREE.Matrix3();
       if (i < nLoads) {
-        const M = terms[i]!;
+        const M = ellipsoidMats[i]!;
         m.set(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7], M[8]);
       } else {
         m.set(0, 0, 0, 0, 0, 0, 0, 0, 0);
