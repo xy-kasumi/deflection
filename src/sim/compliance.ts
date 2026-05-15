@@ -625,18 +625,22 @@ function modeTorsion(M: Vec3, s_load: number, s_eval: number, G_MPa: number, J_m
 //
 // In-plane bending of a cantilever along +Z (fixed at s=0). One bending plane
 // per call: choose `F_perp` and `M_about` as the in-plane projections of the
-// applied (F, M). Returns (u_perp, rot_about) at s_eval given a tip-style
-// (force + moment) load at s_load — both with zero BCs at the base.
+// applied (F, M), both in the right-hand-rule convention. Returns
+// (u_perp, rot_about) at s_eval given a tip-style (force + moment) load at
+// s_load — both with zero BCs at the base.
 //
-// `sigma` ties the rotation-vector sign to (axis_perp, axis_about, axial)
-// chirality. For (perp=y, about=x, axial=z) — i.e. bending about beam-X —
-// sigma = -1: positive du_perp/ds (beam tilts toward +y) corresponds to a
-// *negative* rotation about +x, since +x rotation takes +z toward -y. For
-// (perp=x, about=y, axial=z) — bending about beam-Y — sigma = +1.
-//
-// The same sigma also flips the M_about coefficient because the moment that
-// drives positive u_perp is itself sign-tied to the same chirality: the
-// formula carries -sigma * M_about throughout.
+// `sigma` ties signs to (axis_perp, axis_about, axial) chirality, governing
+// two relations at once:
+//   1. rot_about_RHR = sigma * du_perp/ds. For (perp=y, about=x, axial=z) —
+//      modeBendIx, sigma=-1 — positive du_perp/ds (beam tilts toward +y)
+//      corresponds to *negative* RHR rotation about +x, since +x rotation
+//      takes +z toward -y. For (perp=x, about=y, axial=z) — modeBendIy,
+//      sigma=+1 — du_perp/ds and rot match in sign.
+//   2. The bending moment carries +sigma * M_about: an RHR tip moment M_x
+//      (sigma=-1, modeBendIx) drives u_y *negative* (-M·L²/(2EI)); an RHR
+//      tip moment M_y (sigma=+1, modeBendIy) drives u_x *positive*
+//      (+M·L²/(2EI)). Same sigma value gates both because both flow from
+//      the same chirality.
 function modeBend(
   F_perp: number, M_about: number,
   s_load: number, s_eval: number, EI: number, sigma: -1 | 1,
@@ -644,11 +648,11 @@ function modeBend(
   let u_perp: number;
   let du_ds: number;
   if (s_eval <= s_load) {
-    u_perp = (F_perp * s_eval * s_eval * (3 * s_load - s_eval) / 6 - sigma * M_about * s_eval * s_eval / 2) / EI;
-    du_ds  = (F_perp * s_eval * (s_load - s_eval / 2)              - sigma * M_about * s_eval)              / EI;
+    u_perp = (F_perp * s_eval * s_eval * (3 * s_load - s_eval) / 6 + sigma * M_about * s_eval * s_eval / 2) / EI;
+    du_ds  = (F_perp * s_eval * (s_load - s_eval / 2)              + sigma * M_about * s_eval)              / EI;
   } else {
-    const u_at  = (F_perp * s_load * s_load * s_load / 3 - sigma * M_about * s_load * s_load / 2) / EI;
-    const du_at = (F_perp * s_load * s_load / 2          - sigma * M_about * s_load)              / EI;
+    const u_at  = (F_perp * s_load * s_load * s_load / 3 + sigma * M_about * s_load * s_load / 2) / EI;
+    const du_at = (F_perp * s_load * s_load / 2          + sigma * M_about * s_load)              / EI;
     u_perp = u_at + du_at * (s_eval - s_load);
     du_ds  = du_at;
   }

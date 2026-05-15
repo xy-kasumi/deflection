@@ -277,5 +277,45 @@ function singleCantilever(): Problem {
   }
 }
 
+// ---- Test 8: transverse bending moment transport (M-sign convention) ----
+// Chain horz (axial +X) → up (axial +Y), F=+X_world at beam1.tip. The force
+// is axial to beam0 (no F-driven bending on beam0), but the arm (0, L, 0)
+// crosses with +X to give a pure +X_world moment-of-load × F = (0, 0, -L)
+// at beam0's tip — i.e., M_local_x = +L (RHR) on beam0. This was the one
+// configuration that exercised the bending-moment sign convention against
+// transverse bending, and the formula's M_about coefficient used to be
+// flipped vs RHR. Test pins the corrected output.
+{
+  console.log('\n-- Test 8: transverse M transport (chain horz→up, F=+X) --');
+  const beam1: Beam = {
+    frame: { origin_mm: [L, 0, 0], ex: [0, 0, -1], ey: [-1, 0, 0], axial: [0, 1, 0] },
+    length_mm: L,
+    section: RECT_10,
+    material: STEEL,
+  };
+  const problem: Problem = {
+    beams: [horzBeam([0, 0, 0], L), beam1],
+    loads: [{ beamIx: 1, offset_mm: L, Fmax_N: 1 }],
+    queries: [{ beamIx: 1, offset_mm: L }],
+    support: 'single',
+  };
+  const c = buildCompliances(problem);
+  if ('kind' in c) {
+    expect('buildCompliances ok', false);
+  } else {
+    const C = c.totals.find((x) => x.queryIx === 0 && x.loadIx === 0)!.C;
+    // Column 0 = response to F=+X_world. Decomposition:
+    //   beam0 sees pure tip moment M_x_local=+L (RHR) → u_y_local(L)
+    //     = -L · L²/(2·EIx) (physics: +RHR moment about +x tilts +z toward
+    //     -y, so deflection in -y). World u_y = -L³/(2·EIx). Plus the
+    //     rotation transport rot × arm contributes +L³/EIx along world +X.
+    //   beam1 sees F_local_y=-1 → u_world += +L³/(3·EIx) along +X, 0 in +Y.
+    //   Total: ux = +L³/EIx + L³/(3·EIx) = +4L³/(3·EIx);  uy = -L³/(2·EIx).
+    check('C[ux←F_x] = +4·L³/(3·EIx)', C[0]!, 4 * (L ** 3) / (3 * EIx),  1e-9);
+    check('C[uy←F_x] = -L³/(2·EIx)',   C[3]!, -(L ** 3) / (2 * EIx),     1e-9);
+    checkNear0('C[uz←F_x] = 0', C[6]!);
+  }
+}
+
 console.log(failed ? '\nSMOKE FAILED' : '\nsmoke ok');
 process.exitCode = failed ? 1 : 0;
