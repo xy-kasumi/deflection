@@ -48,7 +48,18 @@ const MODE_COLUMNS: Mode[] = [
   'bendIyRot',
   'twist',
 ];
-const MODE_HEADERS = ['bV(tran)', 'bH(tran)', 'bV(rot)', 'bH(rot)', 'tw'];
+const MODE_HEADERS = ['↕Δ', '↔Δ', '↕θ', '↔θ', '⟳'];
+// Tooltip wording scopes "translation"/"rotation" inside the bending mode
+// (the two Euler-Bernoulli contributions: u and du/ds), not the world frame
+// — the resulting cell value is mm-at-the-query, whose world direction
+// depends on this beam's pose, not on the column's symbol.
+const MODE_TOOLTIPS = [
+  "Translation part of this beam's ↕ bending. Resisted by Ix.",
+  "Translation part of this beam's ↔ bending. Resisted by Iy.",
+  "Rotation part of this beam's ↕ bending.",
+  "Rotation part of this beam's ↔ bending.",
+  "Twist of this beam.",
+];
 
 export function renderBreakdown(
   el: HTMLElement,
@@ -95,7 +106,12 @@ export function renderBreakdown(
   const decompHeader = document.createElement('div');
   decompHeader.className = 'bd-section bd-section-toolbar';
   const decompTitle = document.createElement('span');
-  decompTitle.textContent = `decomposition  tot ≲ ${formatMm(rows.deltaMax)}`;
+  decompTitle.append(`decomposition of δ (tot ≲ ${formatMm(rows.deltaMax)}) `);
+  const help = document.createElement('span');
+  help.className = 'bd-help';
+  help.textContent = '?';
+  help.title = 'Pessimistic upper bound. (Worst case per beam/mode, summed.)';
+  decompTitle.appendChild(help);
   decompHeader.append(decompTitle, formatToggle(format, onFormatChange));
   el.appendChild(decompHeader);
 
@@ -106,8 +122,19 @@ export function renderBreakdown(
     const grid = document.createElement('div');
     grid.className = 'bd-beams';
     grid.append(headerCell(''));
-    for (const text of MODE_HEADERS) grid.append(headerCell(text));
+    MODE_HEADERS.forEach((text, i) => grid.append(headerCell(text, MODE_TOOLTIPS[i])));
     grid.append(headerCell('total'));
+
+    // Heatmap: cells fade by their underlying mm value, regardless of pct/abs
+    // display. Sub-modes and totals normalize separately — totals have a
+    // larger range, so sharing one max would wash sub-mode cells out.
+    const subModeMax = Math.max(
+      0,
+      ...rows.perBeam.flatMap((b) => [
+        b.bendIxTrans, b.bendIyTrans, b.bendIxRot, b.bendIyRot, b.twist,
+      ]),
+    );
+    const totalsMax = Math.max(0, ...rows.perBeam.map((b) => b.total));
 
     for (const b of rows.perBeam) {
       const name = document.createElement('span');
@@ -120,7 +147,7 @@ export function renderBreakdown(
         b.twist,
       ];
       modeValues.forEach((val, i) => {
-        const cell = valueCell(val, rows.deltaMax, format);
+        const cell = valueCell(val, rows.deltaMax, format, intensityOf(val, subModeMax));
         if (hover) {
           const m = MODE_COLUMNS[i]!;
           cell.classList.add('hoverable');
@@ -130,7 +157,9 @@ export function renderBreakdown(
         grid.append(cell);
       });
 
-      const totalCell = valueCell(b.total, rows.deltaMax, format, true);
+      const totalCell = valueCell(
+        b.total, rows.deltaMax, format, intensityOf(b.total, totalsMax), true,
+      );
       if (hover) {
         totalCell.classList.add('hoverable');
         const keys = MODE_COLUMNS.map((mode) => ({ beamIx: b.beamIx, mode }));
@@ -151,19 +180,17 @@ export function renderBreakdown(
     const grid = document.createElement('div');
     grid.className = 'bd-loads';
     const loadRows = [...rows.perLoad].sort((a, b) => b.delta_mm - a.delta_mm);
+    const loadsMax = loadRows.reduce((m, r) => Math.max(m, r.delta_mm), 0);
     for (const r of loadRows) {
       const load = loads[r.loadIx];
       const loc = loadLocEl(load, loadProvenance[r.loadIx], src);
       const force = document.createElement('span');
       force.className = 'force';
       force.textContent = formatLoad(load?.Fmax_N ?? 0);
-      const delta = document.createElement('span');
-      delta.className = 'delta';
-      delta.textContent = formatMm(r.delta_mm);
-      const frac = document.createElement('span');
-      frac.className = 'frac';
-      frac.textContent = formatPct(fractionOf(r.delta_mm, rows.deltaMax));
-      grid.append(loc, force, delta, frac);
+      const value = valueCell(
+        r.delta_mm, rows.deltaMax, format, intensityOf(r.delta_mm, loadsMax),
+      );
+      grid.append(loc, force, value);
     }
     el.appendChild(grid);
   }
@@ -201,27 +228,45 @@ function decompose(sel: DeflectionQueryResult): BreakdownRows {
   return { deltaMax, perBeam, perLoad };
 }
 
-function headerCell(text: string): HTMLElement {
+function headerCell(text: string, title?: string): HTMLElement {
   const h = document.createElement('span');
   h.className = 'hdr';
   h.textContent = text;
+  if (title) h.title = title;
   return h;
 }
 
-function valueCell(value_mm: number, total_mm: number, format: DecompFormat, isTotal = false): HTMLElement {
+// `intensity` ∈ [0, 1] from the caller; opacity floors at 0.2 so 0-value
+// cells stay legible while max-value cells read at full strength.
+function valueCell(
+  value_mm: number,
+  total_mm: number,
+  format: DecompFormat,
+  intensity: number,
+  isTotal = false,
+): HTMLElement {
   const cell = document.createElement('span');
   cell.className = isTotal ? 'frac total' : 'frac';
   cell.textContent = format === 'pct'
     ? formatPct(fractionOf(value_mm, total_mm))
     : formatMm(value_mm);
+  cell.style.opacity = String(0.2 + 0.8 * clamp01(intensity));
   return cell;
+}
+
+function intensityOf(value: number, max: number): number {
+  return max > 1e-30 ? value / max : 0;
+}
+
+function clamp01(x: number): number {
+  return Math.max(0, Math.min(1, x));
 }
 
 function formatToggle(current: DecompFormat, onChange: (next: DecompFormat) => void): HTMLElement {
   const wrap = document.createElement('span');
   wrap.className = 'bd-fmt-toggle';
   const opts: { val: DecompFormat; label: string }[] = [
-    { val: 'pct', label: 'pct' },
+    { val: 'pct', label: '%' },
     { val: 'abs', label: 'abs' },
   ];
   for (const o of opts) {

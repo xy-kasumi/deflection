@@ -102,6 +102,20 @@ html, body {
   gap: 12px;
 }
 
+#info .bd-help {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  line-height: 13px;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: help;
+  user-select: none;
+}
+
 #info .bd-fmt-toggle {
   display: inline-flex;
   gap: 2px;
@@ -128,20 +142,19 @@ html, body {
   color: var(--bg-panel);
 }
 
-#info .bd-beams .hdr,
-#info .bd-beams .total {
+#info .bd-beams .hdr {
   color: var(--text-muted);
 }
 
 #info .bd-loads {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  /* loc + force + value(mm or %) */
+  grid-template-columns: 1fr auto auto;
   column-gap: 12px;
   color: var(--text-fg);
 }
 
-#info .bd-loads .force,
-#info .bd-loads .delta {
+#info .bd-loads .force {
   color: var(--text-muted);
   text-align: right;
 }
@@ -152,9 +165,8 @@ html, body {
   text-align: right;
 }
 
-/* Scalar-mode (beam, mode) cells: subtle hover highlight signals the cell is
-   cursor-interactive. Realistic-mode cells don't get .hoverable so they
-   stay inert. */
+/* (beam, sub-mode) cells: hover highlight signals interactivity even when the
+   heatmap has faded the text down. */
 #info .bd-beams .frac.hoverable {
   cursor: default;
   user-select: none;
@@ -163,10 +175,6 @@ html, body {
 #info .bd-beams .frac.hoverable:hover {
   background: var(--bg-hover);
   border-radius: var(--radius-sm);
-}
-
-#info .bd-loads .frac {
-  color: var(--text-muted);
 }
 
 /* The empty top-left header cell still needs to claim its grid slot. */
