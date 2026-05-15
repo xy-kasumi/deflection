@@ -127,18 +127,15 @@ function scaleMat(M: Mat3, s: number): Mat3 {
   ];
 }
 
-// Connectivity tolerance: walker-built chains are exact to float precision, so
-// anything beyond this is a genuinely disconnected input.
-const CONNECT_EPS_MM = 1e-6;
-
 /**
  * Solve the deflection problem. Either succeeds with one result per query, or
  * fails — there is no silent fallback. See SimError for the failure modes.
+ *
+ * Structural preconditions (root at origin, beams[i>0] attaches on beams[i-1]'s
+ * axis) are checked inside `buildCompliances` → `buildSegmentation` and
+ * surface as the same SimError codes.
  */
 export function simulate(problem: Problem): SimOutcome {
-  const invalid = validate(problem);
-  if (invalid) return invalid;
-
   const beams = problem.beams;
   if (beams.length === 0) {
     return { kind: 'ok', queryResults: [] };
@@ -167,38 +164,4 @@ export function simulate(problem: Problem): SimOutcome {
   }
 
   return { kind: 'ok', queryResults };
-}
-
-// Validate sim/'s structural preconditions: the chain is serial, clamped at
-// the world origin, with each beam attached on its parent's axis segment.
-function validate(problem: Problem): SimError | null {
-  const beams = problem.beams;
-  if (beams.length === 0) return null;
-
-  const o = beams[0]!.frame.origin_mm;
-  if (Math.hypot(o[0], o[1], o[2]) > CONNECT_EPS_MM) {
-    return {
-      kind: 'error',
-      code: 'root-not-at-origin',
-      message: `root beam must be clamped at the world origin; got [${o.join(', ')}]`,
-    };
-  }
-
-  for (let i = 1; i < beams.length; i++) {
-    const parent = beams[i - 1]!;
-    const child = beams[i]!.frame.origin_mm;
-    const p = parent.frame.origin_mm;
-    const a = parent.frame.axial;
-    const rel: Vec3 = [child[0] - p[0], child[1] - p[1], child[2] - p[2]];
-    const s = rel[0] * a[0] + rel[1] * a[1] + rel[2] * a[2]; // projection onto the unit axis
-    const perp = Math.hypot(rel[0] - a[0] * s, rel[1] - a[1] * s, rel[2] - a[2] * s);
-    if (perp > CONNECT_EPS_MM || s < -CONNECT_EPS_MM || s > parent.length_mm + CONNECT_EPS_MM) {
-      return {
-        kind: 'error',
-        code: 'beams-disconnected',
-        message: `beam ${i} does not attach to beam ${i - 1}'s axis`,
-      };
-    }
-  }
-  return null;
 }

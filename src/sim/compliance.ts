@@ -1,6 +1,7 @@
-import type { Beam, Frame, Problem } from './problem';
+import type { Frame, Problem } from './problem';
 import type { Vec3, Mat3 } from './math';
 import type { SimError } from './simulate';
+import { buildSegmentation, type Segment } from './segment';
 
 /**
  * Per-beam deflection sub-modes, each rank-1 at any query: the (deflection
@@ -23,22 +24,6 @@ export type Mode =
   | 'bendIxRot'
   | 'bendIyTrans'
   | 'bendIyRot';
-
-interface Node {
-  beamIx: number;
-  offset_mm: number;
-}
-
-/**
- * Load node. Real caller-supplied loads are `kind: 'force', source: 'real'`.
- * For `support: 'both'` we transiently add two `source: 'clamp'` synthetic
- * loads at the root-beam end (a force and a moment) to solve the fixed-fixed
- * compatibility system; they're discarded before `Compliances` is returned.
- */
-interface LoadNode extends Node {
-  kind: 'force' | 'moment';
-  source: 'real' | 'clamp';
-}
 
 interface ComplianceEntry {
   queryIx: number;
@@ -73,158 +58,128 @@ export interface Compliances {
 }
 
 export function buildCompliances(problem: Problem): Compliances | SimError {
-  const beams = problem.beams;
+  const seg = buildSegmentation(problem);
+  if ('kind' in seg) return seg;
 
-  // Query nodes: the caller's queries, plus — under support(both) — the root
-  // beam's end. That point is a clamped joint (deflection zero by
-  // construction) so it's not a reported query, but the fixed-fixed
-  // compatibility solve below needs its compliance entries.
-  const queryNodes: Node[] = problem.queries.map((q) => ({
-    beamIx: q.beamIx,
-    offset_mm: q.offset_mm,
-  }));
-  const fixedFixed = problem.support === 'both' && beams.length > 0;
-  if (fixedFixed) {
-    const rootEnd = beams[0]!.length_mm;
-    if (!queryNodes.some((n) => n.beamIx === 0 && n.offset_mm === rootEnd)) {
-      queryNodes.push({ beamIx: 0, offset_mm: rootEnd });
-    }
+  if (seg.segments.length === 0) {
+    return { loadFmax_N: [], entries: [], totals: [], rotationTotals: [] };
   }
 
-  // Load nodes: one per resolved load, in caller order.
-  const loadNodes: LoadNode[] = [];
+  const beamCount = problem.beams.length;
+  const fixedFixed = problem.support === 'both';
+
+  // ---------- Load and query tables (real + clamp synthetics) ----------
+  // Loads are listed in caller order (matches segLoad.loadIx ordering); fixed-
+  // fixed appends two synthetics at the root beam's end node — a force and a
+  // moment — for the compatibility solve. They're dropped before public output.
+  interface LoadEntry { nodeIx: number; kind: 'force' | 'moment' }
+  const loadEntries: LoadEntry[] = [];
   const loadFmax_N: number[] = [];
-  for (const ld of problem.loads) {
-    loadNodes.push({ beamIx: ld.beamIx, offset_mm: ld.offset_mm, kind: 'force', source: 'real' });
-    loadFmax_N.push(ld.Fmax_N);
+  const segLoadByIx = new Map<number, typeof seg.loads[number]>();
+  for (const sl of seg.loads) segLoadByIx.set(sl.loadIx, sl);
+  for (let ix = 0; ix < problem.loads.length; ix++) {
+    const sl = segLoadByIx.get(ix)!;
+    loadEntries.push({ nodeIx: sl.nodeIx, kind: 'force' });
+    loadFmax_N.push(sl.Fmax_N);
   }
+  const realLoadCount = problem.loads.length;
 
-  // For support(both), append two synthetic loads at the root beam's end:
-  // the reaction force and reaction moment that clamp it. Build cantilever
-  // compliance with these extras, then solve a 4×4 compatibility system for
-  // the chord-perpendicular reaction components (chord = root beam axis;
-  // force/flexibility method).
   let clampForceLoadIx = -1;
   let clampMomentLoadIx = -1;
+  const clampNodeIx = fixedFixed ? seg.beamEndNode[0]! : -1;
   if (fixedFixed) {
-    const rootEnd = beams[0]!.length_mm;
-    clampForceLoadIx = loadNodes.length;
-    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'force', source: 'clamp' });
-    loadFmax_N.push(0); // placeholder; reaction is derived, not user-supplied.
-    clampMomentLoadIx = loadNodes.length;
-    loadNodes.push({ beamIx: 0, offset_mm: rootEnd, kind: 'moment', source: 'clamp' });
+    clampForceLoadIx = loadEntries.length;
+    loadEntries.push({ nodeIx: clampNodeIx, kind: 'force' });
+    loadFmax_N.push(0);
+    clampMomentLoadIx = loadEntries.length;
+    loadEntries.push({ nodeIx: clampNodeIx, kind: 'moment' });
     loadFmax_N.push(0);
   }
 
-  // Precompute per-beam rotation matrix R_i (frame columns).
-  const Rs: Mat3[] = beams.map((b) => frameToR(b.frame));
-
-  // Chain-exit point on each beam i: the (offset, world-position) where beam
-  // i+1 attaches — i.e., where the chain continues. For tip-to-root
-  // connections this equals (length, tip); for non-tip attachments (e.g. a
-  // `mid:` branch) it's the actual attach offset, derived from the next
-  // beam's origin. validate() guarantees beams[i+1].origin lies on beam i's
-  // axial line, so the projection here is exact.
-  //
-  // Why a named array instead of using `length_mm` / `tip = origin + axial·L`
-  // directly: the per-beam math needs "where on beam i does the load/query
-  // sit, when neither is on beam i itself" — which is the chain-exit point,
-  // not beam i's own tip. Collapsing the two only works when every child
-  // attaches at its parent's tip.
-  //
-  // Last beam in the array has no successor; its entry falls back to (L,
-  // tip). The per-beam loop below never reads that fallback in practice (at
-  // i = iMax, either i is the load beam or the query beam — `chainExit_mm`
-  // is only used in the `else` branch).
-  const chainExit_mm: number[] = beams.map((b, i) => {
-    if (i + 1 >= beams.length) return b.length_mm;
-    const child = beams[i + 1]!.frame.origin_mm;
-    const rel: Vec3 = [
-      child[0] - b.frame.origin_mm[0],
-      child[1] - b.frame.origin_mm[1],
-      child[2] - b.frame.origin_mm[2],
-    ];
-    const a = b.frame.axial;
-    return rel[0] * a[0] + rel[1] * a[1] + rel[2] * a[2];
-  });
-  const chainExitWorld: Vec3[] = beams.map((b, i) => {
-    if (i + 1 >= beams.length) {
-      return addV(b.frame.origin_mm, scaleV(b.frame.axial, b.length_mm));
+  const queryNodeIxs: number[] = new Array(problem.queries.length);
+  const segQueryByIx = new Map<number, typeof seg.queries[number]>();
+  for (const sq of seg.queries) segQueryByIx.set(sq.queryIx, sq);
+  for (let ix = 0; ix < problem.queries.length; ix++) {
+    queryNodeIxs[ix] = segQueryByIx.get(ix)!.nodeIx;
+  }
+  let clampQueryIx = -1;
+  if (fixedFixed) {
+    const existing = queryNodeIxs.indexOf(clampNodeIx);
+    if (existing >= 0) clampQueryIx = existing;
+    else {
+      clampQueryIx = queryNodeIxs.length;
+      queryNodeIxs.push(clampNodeIx);
     }
-    return beams[i + 1]!.frame.origin_mm;
-  });
+  }
 
-  const entries: ComplianceEntry[] = [];
+  // ---------- Tree topology helpers ----------
+  // parentSeg[n] = the segment whose tip is node n. Undefined at the root.
+  // The chain from root to any node is the unique path obtained by walking
+  // parentSeg upward. For a (load_node, query_node) pair, the segments that
+  // *flex* are the common prefix of the two chains — i.e. path root → LCA.
+  // Segments past the LCA on the load side carry the load internally but
+  // their motion does not propagate up to the query side (it's downstream).
+  const parentSeg = new Array<Segment | undefined>(seg.nodes.length).fill(undefined);
+  for (const s of seg.segments) parentSeg[s.tipNodeIx] = s;
+
+  const segR = new Map<Segment, { R: Mat3; RT: Mat3 }>();
+  for (const s of seg.segments) {
+    const R = frameToR(s.frame);
+    segR.set(s, { R, RT: transposeM(R) });
+  }
+
+  function chainTo(nodeIx: number): Segment[] {
+    const out: Segment[] = [];
+    let cur = nodeIx;
+    while (parentSeg[cur]) {
+      out.push(parentSeg[cur]!);
+      cur = parentSeg[cur]!.baseNodeIx;
+    }
+    return out.reverse();
+  }
+  const chainPerLoad = loadEntries.map((l) => chainTo(l.nodeIx));
+  const chainPerQuery = queryNodeIxs.map((nodeIx) => chainTo(nodeIx));
+
+  // ---------- Per-(load, query) compliance walk ----------
+  // Per-(q, p, b, m) accumulator. One user beam can span several segments
+  // (when attachments/loads/queries split it), so multiple segment-level
+  // contributions get summed into the same (b, m) bucket.
+  const entryMap = new Map<string, Mat3>();
   const totalsMap = new Map<string, Mat3>();
-  // Per-(q, p) rotation compliance, accumulated alongside translation. Same
-  // sparse-Map shape as totalsMap. Each entry is a world-frame 3×3 mapping
-  // unit world force/moment input at load p to linearized world rotation
-  // vector at query q. Surfaced publicly as `rotationTotals` so consumers
-  // can build a ConvexEnvelope for δθ. The fixed-fixed compatibility solve
-  // reads its `clampRot` rows from this same store.
   const rotMap = new Map<string, Mat3>();
 
-  // For fixed-fixed compatibility: locate the clamp-point query (root beam's
-  // end, added to queryNodes above if not already present).
-  const rootEndOffset = beams.length > 0 ? beams[0]!.length_mm : 0;
-  const clampQueryIx = fixedFixed
-    ? queryNodes.findIndex(
-        (n) => n.beamIx === 0 && n.offset_mm === rootEndOffset,
-      )
-    : -1;
+  for (let p = 0; p < loadEntries.length; p++) {
+    const ln = loadEntries[p]!;
+    const loadWorldPos = seg.nodes[ln.nodeIx]!.pos_mm;
+    const chainL = chainPerLoad[p]!;
 
-  for (let p = 0; p < loadNodes.length; p++) {
-    const ln = loadNodes[p] as LoadNode;
-    const k = ln.beamIx;
-    const s_p = ln.offset_mm;
-    const loadWorldPos = addV(
-      beams[k]!.frame.origin_mm,
-      scaleV(beams[k]!.frame.axial, s_p),
-    );
+    for (let q = 0; q < queryNodeIxs.length; q++) {
+      const queryNodeIx = queryNodeIxs[q]!;
+      const queryWorldPos = seg.nodes[queryNodeIx]!.pos_mm;
+      const chainQ = chainPerQuery[q]!;
 
-    for (let q = 0; q < queryNodes.length; q++) {
-      const qn = queryNodes[q] as Node;
-      const m = qn.beamIx;
-      const s_q = qn.offset_mm;
-      const queryWorldPos = addV(
-        beams[m]!.frame.origin_mm,
-        scaleV(beams[m]!.frame.axial, s_q),
-      );
+      // Common prefix = path root → LCA(load_node, query_node). Reference
+      // equality is sufficient: both chains share the same `Segment`
+      // instances out of `seg.segments`.
+      let commonLen = 0;
+      const lenMin = Math.min(chainL.length, chainQ.length);
+      while (commonLen < lenMin && chainL[commonLen] === chainQ[commonLen]) commonLen++;
 
       const totalC = newMat3();
 
-      // Beams that flex from load p AND lie on the chain to the query.
-      const iMax = Math.min(k, m);
-      for (let i = 0; i <= iMax; i++) {
-        const sect = beams[i]!.section;
-        const mat = beams[i]!.material;
-        const R_i = Rs[i]!;
-        const R_iT = transposeM(R_i);
-        const exit_i = chainExitWorld[i]!;
-        const sExit_i = chainExit_mm[i]!;
+      for (let ci = 0; ci < commonLen; ci++) {
+        const s = chainL[ci]!;
+        const { R, RT } = segR.get(s)!;
+        const tipPos = seg.nodes[s.tipNodeIx]!.pos_mm;
+        const L_seg = s.length_mm;
 
-        const onLoadBeam = i === k;
-        const onQueryBeam = i === m;
+        // Every load and query lives at a segment endpoint by construction,
+        // so the cantilever's "load" and "eval" both sit at this segment's
+        // tip: s_load = s_eval = L_seg.
+        const armToQuery: Vec3 = (queryNodeIx === s.tipNodeIx)
+          ? [0, 0, 0]
+          : subV(queryWorldPos, tipPos);
 
-        // For an upstream beam i (i < k or i < m), the load/query is felt at
-        // beam i's chain-exit offset, not its own tip — those differ when the
-        // next beam attaches mid-axis instead of at the tip.
-        const s_load_local = onLoadBeam ? s_p : sExit_i;
-        const s_eval_local = onQueryBeam ? s_q : sExit_i;
-
-        // Where the contribution is sensed in world frame (for transport arm).
-        // - if onQueryBeam: at queryWorldPos (no transport arm)
-        // - else (i < m): at beam i's chain-exit point; arm to query =
-        //   queryWorldPos - exit_i.
-        const arm = onQueryBeam ? [0, 0, 0] as Vec3 : subV(queryWorldPos, exit_i);
-
-        // Five rank-1 columns of the per-(q, p, i, mode) entry; one column
-        // per world force axis. Each mode's world contribution `R·defl_local
-        // + (R·rot_local) × arm` is split (see translationOnly/transportOnly)
-        // so every surviving Mat3 has rank ≤ 1 at any query (trans column
-        // points along a fixed beam-local axis in world; rot column along a
-        // fixed (axis × arm) direction). Torsion has defl ≡ 0, so it only
-        // has the rotation-transport part — that's what `twist` is.
         const eTwist       = newMat3();
         const eBendIxTrans = newMat3();
         const eBendIxRot   = newMat3();
@@ -234,56 +189,50 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
         for (let j = 0; j < 3; j++) {
           const dir_world: Vec3 = j === 0 ? [1, 0, 0] : j === 1 ? [0, 1, 0] : [0, 0, 1];
 
-          // Effective (F, M) at beam i's chain-exit point in WORLD frame.
+          // (F, M) at the segment's tip in WORLD frame.
           // - 'force' load: F = unit force in world axis j; M = arm × F when
-          //   the load is downstream of beam i (zero when on beam i itself).
-          // - 'moment' load: F = 0; M = unit moment in world axis j (a free
-          //   vector — transports unchanged from load location to beam i's
-          //   chain-exit point because F = 0).
+          //   the load is downstream of this tip (zero when load IS at this
+          //   tip — i.e. the segment hosts the load directly).
+          // - 'moment' load: F = 0; M = unit moment in world axis j (free
+          //   vector — transports unchanged because F = 0).
           let F_world: Vec3;
           let M_world: Vec3;
           if (ln.kind === 'force') {
             F_world = dir_world;
-            if (onLoadBeam) {
+            if (ln.nodeIx === s.tipNodeIx) {
               M_world = [0, 0, 0];
             } else {
-              const armToLoad = subV(loadWorldPos, exit_i);
+              const armToLoad = subV(loadWorldPos, tipPos);
               M_world = crossV(armToLoad, F_world);
             }
           } else {
             F_world = [0, 0, 0];
             M_world = dir_world;
           }
-          const F_local = matVec(R_iT, F_world);
-          const M_local = matVec(R_iT, M_world);
+          const F_local = matVec(RT, F_world);
+          const M_local = matVec(RT, M_world);
 
-          // Per-mode local-frame deflection + rotation at s_eval.
-          const to = modeTorsion(M_local, s_load_local, s_eval_local, mat.G_MPa, sect.J_mm4);
-          const bx = modeBendIx(F_local, M_local, s_load_local, s_eval_local, mat.E_MPa, sect.Ix_mm4);
-          const by = modeBendIy(F_local, M_local, s_load_local, s_eval_local, mat.E_MPa, sect.Iy_mm4);
+          const to = modeTorsion(M_local, L_seg, L_seg, s.material.G_MPa, s.section.J_mm4);
+          const bx = modeBendIx(F_local, M_local, L_seg, L_seg, s.material.E_MPa, s.section.Ix_mm4);
+          const by = modeBendIy(F_local, M_local, L_seg, L_seg, s.material.E_MPa, s.section.Iy_mm4);
 
-          // Split each mode's contribution into translation-only (R·defl) and
-          // rotation-transport-only ((R·rot) × arm). Torsion's defl is zero so
-          // there's no "twistTrans" — `twist` carries only the rotation-transport.
-          setMatCol(eTwist,       j, transportOnly(R_i, to.rot, arm));
-          setMatCol(eBendIxTrans, j, translationOnly(R_i, bx.defl));
-          setMatCol(eBendIxRot,   j, transportOnly(R_i, bx.rot, arm));
-          setMatCol(eBendIyTrans, j, translationOnly(R_i, by.defl));
-          setMatCol(eBendIyRot,   j, transportOnly(R_i, by.rot, arm));
+          setMatCol(eTwist,       j, transportOnly(R, to.rot, armToQuery));
+          setMatCol(eBendIxTrans, j, translationOnly(R, bx.defl));
+          setMatCol(eBendIxRot,   j, transportOnly(R, bx.rot, armToQuery));
+          setMatCol(eBendIyTrans, j, translationOnly(R, by.defl));
+          setMatCol(eBendIyRot,   j, transportOnly(R, by.rot, armToQuery));
 
-          // Rotation accumulation per (q, p). Sum rotation across the modes
-          // (rotation is a free vector, so world rotation at beam i's eval
-          // point is R_i · rot_local), then accumulate across beams. For
-          // queries downstream of beam i, this rotation also propagates
-          // *into translation* via rot × arm — that's already captured in
-          // the per-mode transport calls above. Here we collect only the
-          // rotation itself, which is what δθ_q maxes over.
+          // Rotation accumulation per (q, p). Rotation is a free vector, so
+          // world rotation at the segment tip is R · rot_local; accumulating
+          // across the common chain gives the total world rotation at the
+          // query. Bend-rotation's transport-to-translation contribution is
+          // already captured by the *Rot columns above.
           const rotLocalX = to.rot[0] + bx.rot[0] + by.rot[0];
           const rotLocalY = to.rot[1] + bx.rot[1] + by.rot[1];
           const rotLocalZ = to.rot[2] + bx.rot[2] + by.rot[2];
-          const rW0 = R_i[0] * rotLocalX + R_i[1] * rotLocalY + R_i[2] * rotLocalZ;
-          const rW1 = R_i[3] * rotLocalX + R_i[4] * rotLocalY + R_i[5] * rotLocalZ;
-          const rW2 = R_i[6] * rotLocalX + R_i[7] * rotLocalY + R_i[8] * rotLocalZ;
+          const rW0 = R[0] * rotLocalX + R[1] * rotLocalY + R[2] * rotLocalZ;
+          const rW1 = R[3] * rotLocalX + R[4] * rotLocalY + R[5] * rotLocalZ;
+          const rW2 = R[6] * rotLocalX + R[7] * rotLocalY + R[8] * rotLocalZ;
           const rotKey = `${q},${p}`;
           let rotT = rotMap.get(rotKey);
           if (!rotT) { rotT = newMat3(); rotMap.set(rotKey, rotT); }
@@ -292,27 +241,40 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
           rotT[6 + j] = (rotT[6 + j] as number) + rW2;
         }
 
-        if (!isZeroMat(eTwist))       { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'twist',       C: eTwist       }); addMat(totalC, eTwist); }
-        if (!isZeroMat(eBendIxTrans)) { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'bendIxTrans', C: eBendIxTrans }); addMat(totalC, eBendIxTrans); }
-        if (!isZeroMat(eBendIxRot))   { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'bendIxRot',   C: eBendIxRot   }); addMat(totalC, eBendIxRot); }
-        if (!isZeroMat(eBendIyTrans)) { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'bendIyTrans', C: eBendIyTrans }); addMat(totalC, eBendIyTrans); }
-        if (!isZeroMat(eBendIyRot))   { entries.push({ queryIx: q, loadIx: p, beamIx: i, mode: 'bendIyRot',   C: eBendIyRot   }); addMat(totalC, eBendIyRot); }
+        accumEntry(entryMap, q, p, s.beamIx, 'twist',       eTwist,       totalC);
+        accumEntry(entryMap, q, p, s.beamIx, 'bendIxTrans', eBendIxTrans, totalC);
+        accumEntry(entryMap, q, p, s.beamIx, 'bendIxRot',   eBendIxRot,   totalC);
+        accumEntry(entryMap, q, p, s.beamIx, 'bendIyTrans', eBendIyTrans, totalC);
+        accumEntry(entryMap, q, p, s.beamIx, 'bendIyRot',   eBendIyRot,   totalC);
       }
 
       totalsMap.set(`${q},${p}`, totalC);
     }
   }
 
-  let clampForceLoadIxAtAdjust = clampForceLoadIx;
-  let clampMomentLoadIxAtAdjust = clampMomentLoadIx;
+  // Materialize entries from the (q, p, b, m) accumulator.
+  const entries: ComplianceEntry[] = [];
+  for (const [key, C] of entryMap) {
+    if (isZeroMat(C)) continue;
+    const [qStr, pStr, bStr, mStr] = key.split(',');
+    entries.push({
+      queryIx: Number(qStr),
+      loadIx: Number(pStr),
+      beamIx: Number(bStr),
+      mode: mStr as Mode,
+      C,
+    });
+  }
+
+  // ---------- Fixed-fixed compatibility solve ----------
   if (fixedFixed) {
-    const adjusted = applyFixedFixed(
-      beams, queryNodes, loadNodes, entries, totalsMap, rotMap,
-      clampForceLoadIxAtAdjust, clampMomentLoadIxAtAdjust,
+    const clampWorld = seg.nodes[clampNodeIx]!.pos_mm;
+    const ok = applyFixedFixed(
+      beamCount, queryNodeIxs.length, realLoadCount,
+      entries, totalsMap, rotMap,
+      clampQueryIx, clampForceLoadIx, clampMomentLoadIx, clampWorld,
     );
-    if (!adjusted) {
-      // Degenerate chord or singular 4×4 — the support(both) problem can't be
-      // solved. No silent fallback: surface it so the user fixes their input.
+    if (!ok) {
       return {
         kind: 'error',
         code: 'support-singular',
@@ -321,14 +283,11 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
           '— check for a zero-length root beam or a zero-stiffness section',
       };
     }
-    // Adjustment succeeded; drop the two synthetic clamp loads from public API.
-    loadNodes.pop(); loadFmax_N.pop();
-    loadNodes.pop(); loadFmax_N.pop();
-    // Drop synthetic-clamp rotation entries too; the public Compliances only
-    // exposes real loads.
-    for (let q = 0; q < queryNodes.length; q++) {
-      rotMap.delete(`${q},${clampForceLoadIxAtAdjust}`);
-      rotMap.delete(`${q},${clampMomentLoadIxAtAdjust}`);
+    // Drop synthetic clamp loads from public API.
+    loadFmax_N.length = realLoadCount;
+    for (let q = 0; q < queryNodeIxs.length; q++) {
+      rotMap.delete(`${q},${clampForceLoadIx}`);
+      rotMap.delete(`${q},${clampMomentLoadIx}`);
     }
   }
 
@@ -342,6 +301,19 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
   });
 
   return { loadFmax_N, entries, totals, rotationTotals };
+}
+
+function accumEntry(
+  map: Map<string, Mat3>,
+  q: number, p: number, b: number, mode: Mode,
+  C: Mat3, totalC: Mat3,
+): void {
+  if (isZeroMat(C)) return;
+  const key = `${q},${p},${b},${mode}`;
+  let agg = map.get(key);
+  if (!agg) { agg = newMat3(); map.set(key, agg); }
+  addMat(agg, C);
+  addMat(totalC, C);
 }
 
 // ---------- fixed-fixed (support(both)) ----------
@@ -383,35 +355,23 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
 //
 // Per-(beam, mode) contributions use the same recipe on each (b, m) entry.
 function applyFixedFixed(
-  beams: Beam[],
-  queryNodes: Node[],
-  loadNodes: LoadNode[],
+  beamCount: number,
+  queryCount: number,
+  realLoadCount: number,
   entries: ComplianceEntry[],
   totalsMap: Map<string, Mat3>,
   rotMap: Map<string, Mat3>,
+  clampQueryIx: number,
   clampForceLoadIx: number,
   clampMomentLoadIx: number,
+  clampWorld: Vec3,
 ): boolean {
-  const clampForceNode = loadNodes[clampForceLoadIx];
-  const clampMomentNode = loadNodes[clampMomentLoadIx];
-  if (!clampForceNode || !clampMomentNode) return false;
-  const rootBeam = beams[clampForceNode.beamIx];
-  if (!rootBeam) return false;
-  const clampWorld: Vec3 = addV(
-    rootBeam.frame.origin_mm,
-    scaleV(rootBeam.frame.axial, clampForceNode.offset_mm),
-  );
   const chordLen = Math.hypot(clampWorld[0], clampWorld[1], clampWorld[2]);
   if (chordLen < 1e-9) return false;
   const e: Vec3 = [clampWorld[0] / chordLen, clampWorld[1] / chordLen, clampWorld[2] / chordLen];
 
   // Orthonormal basis of the chord-perpendicular plane.
   const [u, v] = orthoBasisFromChord(e);
-
-  const clampQueryIx = queryNodes.findIndex(
-    (n) => n.beamIx === clampForceNode.beamIx && n.offset_mm === clampForceNode.offset_mm,
-  );
-  if (clampQueryIx < 0) return false;
 
   const C_FF = totalsMap.get(`${clampQueryIx},${clampForceLoadIx}`);
   const C_FM = totalsMap.get(`${clampQueryIx},${clampMomentLoadIx}`);
@@ -430,7 +390,6 @@ function applyFixedFixed(
   // For each real load p, solve A·X = B where B is the 4×3 negated cantilever
   // response (chord-perp components of clamp-point deflection and rotation),
   // then project X back to world to get R_world[p] and M_world[p] (3×3 each).
-  const realLoadCount = loadNodes.length - 2; // last two are synthetic
   const R_world: Mat3[] = [];
   const M_world: Mat3[] = [];
 
@@ -477,9 +436,9 @@ function applyFixedFixed(
   // Adjust every real-load entry: direct + via clamp-force·R + via clamp-moment·M.
   const allModes: Mode[] = ['twist', 'bendIxTrans', 'bendIxRot', 'bendIyTrans', 'bendIyRot'];
   const adjusted = new Map<string, Mat3>();
-  for (let q = 0; q < queryNodes.length; q++) {
+  for (let q = 0; q < queryCount; q++) {
     for (let p = 0; p < realLoadCount; p++) {
-      for (let b = 0; b < beams.length; b++) {
+      for (let b = 0; b < beamCount; b++) {
         for (const mode of allModes) {
           const direct    = entryMap.get(`${q},${p},${b},${mode}`);
           const viaClampF = entryMap.get(`${q},${clampForceLoadIx},${b},${mode}`);
@@ -522,7 +481,7 @@ function applyFixedFixed(
   // direct + via clamp-force · R + via clamp-moment · M. Rotation isn't
   // decomposed per (b, m) so we work at the (q, p) level directly.
   const rotAdjusted = new Map<string, Mat3>();
-  for (let q = 0; q < queryNodes.length; q++) {
+  for (let q = 0; q < queryCount; q++) {
     const viaCF = rotMap.get(`${q},${clampForceLoadIx}`);
     const viaCM = rotMap.get(`${q},${clampMomentLoadIx}`);
     for (let p = 0; p < realLoadCount; p++) {
@@ -540,7 +499,7 @@ function applyFixedFixed(
   // after the adjusted real-load rows are in place.
   const cfRows: [string, Mat3][] = [];
   const cmRows: [string, Mat3][] = [];
-  for (let q = 0; q < queryNodes.length; q++) {
+  for (let q = 0; q < queryCount; q++) {
     const cf = rotMap.get(`${q},${clampForceLoadIx}`);
     const cm = rotMap.get(`${q},${clampMomentLoadIx}`);
     if (cf) cfRows.push([`${q},${clampForceLoadIx}`, cf]);
@@ -730,9 +689,7 @@ function isZeroMat(m: Mat3): boolean {
   return true;
 }
 
-function addV(a: Vec3, b: Vec3): Vec3 { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
 function subV(a: Vec3, b: Vec3): Vec3 { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
-function scaleV(a: Vec3, s: number): Vec3 { return [a[0] * s, a[1] * s, a[2] * s]; }
 function crossV(a: Vec3, b: Vec3): Vec3 {
   return [
     a[1] * b[2] - a[2] * b[1],
