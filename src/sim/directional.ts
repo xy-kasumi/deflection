@@ -63,6 +63,21 @@ export function directionalFor(c: Compliances, queryIx: number): Directional {
 }
 
 /**
+ * Rotation Directional at query q. δθ_q(d) = Σ_p F_max_p · |C_rot[q][p]ᵀ · d|
+ * — same support-function machinery as `directionalFor`, just over rotation
+ * compliance instead of translation. d is a unit *rotation axis*; the returned
+ * value is the linearized worst-case rotation magnitude about that axis (rad).
+ */
+export function rotationFor(c: Compliances, queryIx: number): Directional {
+  const ts: DeltaTerm[] = [];
+  for (const t of c.rotationTotals) {
+    if (t.queryIx !== queryIx) continue;
+    ts.push({ N: transpose(t.C), F: c.loadFmax_N[t.loadIx] ?? 0 });
+  }
+  return makeDirectional(ts);
+}
+
+/**
  * δ restricted to each beam's compliance in isolation — each beam worst-cased
  * independently. These do NOT sum to the whole-structure Directional
  * (Σ ≥ δ, triangle inequality); each is honest only on its own.

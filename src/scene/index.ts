@@ -1,10 +1,9 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
-import type { DisplayMode } from '../breakdown';
 import { COLOR, VU, MOTION } from './tokens';
 import { Labels } from './labels';
-import { LobeRenderer, computeLobeCeilWorld } from './lobe';
+import { LobeRenderer, computeLobeCeilWorld, type HoverSegment } from './lobe';
 import { buildChain } from './chain';
 
 const ISO_YAW_DEG = 45;
@@ -48,6 +47,10 @@ export class Scene {
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -10000, 10000);
     this.content = new THREE.Group();
     this.root.add(this.content);
+    // Hover overlay sits at the root, *outside* content. content is disposed
+    // and rebuilt on every update(); the hover group survives so cursor-driven
+    // segments don't blink when an unrelated rebuild happens.
+    this.root.add(this.lobes.getHoverGroup());
     this.yaw = deg(ISO_YAW_DEG);
     this.pitch = deg(ISO_PITCH_DEG);
     this.targetYaw = this.yaw;
@@ -71,7 +74,6 @@ export class Scene {
     supportKind: 'single' | 'both' | undefined,
     editor: { currentBeamIx: number | null; focused: boolean } | undefined,
     selectedNodeIx: number,
-    mode: DisplayMode,
   ): void {
     disposeChildren(this.content);
     this.pickables = [];
@@ -112,7 +114,7 @@ export class Scene {
 
     if (sim && sim.queryResults.length > 0) {
       const r = this.lobes.buildFor(sim, beams, {
-        hitRadius, labelOffset, lobeFloor, selectedNodeIx, focused, mode,
+        hitRadius, labelOffset, lobeFloor, selectedNodeIx, focused,
       });
       for (const m of r.meshes) this.content.add(m);
       this.pickables.push(...r.pickables);
@@ -136,6 +138,17 @@ export class Scene {
 
   setDisplayScale(target: number): void {
     if (this.lobes.setTarget(target)) this.startAnim();
+  }
+
+  // Show / hide hover segments. Pessimistic decomposition has independent
+  // (query, beam, mode) rank-1 contributions, so a single cell hover may
+  // emit one segment per query × one mode = N_queries segments; a per-beam
+  // total hover emits N_queries × 5 segments. apply() runs once so the
+  // fresh meshes pick up the live δ-exag immediately.
+  setHoverSegment(segs: HoverSegment[] | null): void {
+    this.lobes.setHover(segs);
+    this.lobes.apply(computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf));
+    this.refresh();
   }
 
   recommendDisplayScale(delta_max_mm: number): number {

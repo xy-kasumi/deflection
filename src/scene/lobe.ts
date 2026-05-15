@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
 import { delta, type Directional, type DeltaTerm } from '../sim/directional';
-import { formatMm, displayDelta, type DisplayMode } from '../breakdown';
+import { formatMm } from '../breakdown';
 import { COLOR, MOTION, hexToVec3 } from './tokens';
 
 // Normal-lobe rendering. Filled mesh with per-vertex t = δ/δ_max. The fragment
@@ -173,7 +173,6 @@ export interface LobeBuildOpts {
   lobeFloor: number;
   selectedNodeIx: number;
   focused: boolean;
-  mode: DisplayMode;
 }
 
 export interface LobeLabelSpec {
@@ -189,6 +188,16 @@ export interface LobeBuildResult {
   labels: LobeLabelSpec[];
 }
 
+// One straight segment anchored at a query node, oriented along the unit
+// argmax direction d* of a single (beam, mode) part, length δ_{b,m} (mm) at
+// unit δ-exag. The renderer scales it with the live δ-exag and clamps at
+// lobeCeilWorld so the segment never shoots off-screen.
+export interface HoverSegment {
+  origin_mm: Vec3;
+  /** d* · δ_{b,m} — endpoint relative to origin at unit δ-exag. */
+  vector_mm: Vec3;
+}
+
 export class LobeRenderer {
   private lobeAnims: LobeAnim[] = [];
   private lobeFloor = 0;
@@ -199,6 +208,14 @@ export class LobeRenderer {
   // ShaderMaterial instance — uniform-location lookup, attribute binding, and
   // program acquisition for the user-defined shader.
   private normalMatPool: THREE.ShaderMaterial[] = [];
+
+  // Hover-segment overlay. Lives in a group the Scene parents directly to its
+  // root (outside `content`) so it survives chain/lobe rebuilds. The material
+  // is reused across hover changes to keep THREE's program cache warm. Each
+  // child Line carries its unscaled mm length in `userData.dist_mm` so apply()
+  // can clamp it individually against lobeCeilWorld.
+  private hoverGroup = new THREE.Group();
+  private hoverMat = new THREE.LineBasicMaterial({ color: COLOR.deformed });
 
   getTarget(): number {
     return this.displayScale_target;
@@ -242,44 +259,36 @@ export class LobeRenderer {
       const isSel = ix === opts.selectedNodeIx;
       const worldPos = new THREE.Vector3(...n.pos_mm);
 
-      // Scalar mode's δ bound is direction-independent (its "lobe" would be a
-      // sphere); skip building lobe meshes entirely. Hit-sphere and label are
-      // still built below so node picking and the floating δ readout work.
-      let delta_max_mm: number;
-      if (opts.mode === 'scalar') {
-        delta_max_mm = displayDelta(n, 'scalar');
-      } else {
-        const lobeDir = n.deflection;
-        delta_max_mm = lobeDir.max().value;
+      const lobeDir = n.deflection;
+      const delta_max_mm = lobeDir.max().value;
 
-        // All three states are built up-front. The per-frame tick scales/fades
-        // them according to the animated δ-exag; categorical state-switching is
-        // replaced by a continuous crossfade. Base opacities preserve the prior
-        // per-state look at each crossfade endpoint.
-        const reuseMat = this.normalMatPool[ix];
-        const normal = buildNormalLobe(lobeDir, reuseMat);
-        if (!reuseMat) this.normalMatPool[ix] = normal.material as THREE.ShaderMaterial;
-        normal.position.copy(worldPos);
-        meshes.push(normal);
+      // All three states are built up-front. The per-frame tick scales/fades
+      // them according to the animated δ-exag; categorical state-switching is
+      // replaced by a continuous crossfade. Base opacities preserve the prior
+      // per-state look at each crossfade endpoint.
+      const reuseMat = this.normalMatPool[ix];
+      const normal = buildNormalLobe(lobeDir, reuseMat);
+      if (!reuseMat) this.normalMatPool[ix] = normal.material as THREE.ShaderMaterial;
+      normal.position.copy(worldPos);
+      meshes.push(normal);
 
-        const under = buildUnderflowSphere(opts.lobeFloor);
-        under.position.copy(worldPos);
-        meshes.push(under);
+      const under = buildUnderflowSphere(opts.lobeFloor);
+      under.position.copy(worldPos);
+      meshes.push(under);
 
-        const over = buildKonpeito();
-        over.position.copy(worldPos);
-        meshes.push(over);
+      const over = buildKonpeito();
+      over.position.copy(worldPos);
+      meshes.push(over);
 
-        this.lobeAnims.push({
-          delta_max_mm,
-          normalBase: opts.focused ? 0.15 : isSel ? 0.75 : 0.25,
-          underBase:  opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
-          overBase:   opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
-          normal,
-          under,
-          over,
-        });
-      }
+      this.lobeAnims.push({
+        delta_max_mm,
+        normalBase: opts.focused ? 0.15 : isSel ? 0.75 : 0.25,
+        underBase:  opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
+        overBase:   opts.focused ? 0.15 : isSel ? 0.75 : 0.45,
+        normal,
+        under,
+        over,
+      });
 
       // Invisible hit-test sphere — generous, fixed radius. visible:false skips
       // rendering; intersectObjects(pickables, false) still raycasts it.
@@ -315,6 +324,35 @@ export class LobeRenderer {
     this.lobeAnims = [];
   }
 
+  getHoverGroup(): THREE.Group {
+    return this.hoverGroup;
+  }
+
+  // Build hover-segment lines (or clear them). Each segment is at unit δ-exag;
+  // apply() drives the per-frame scale (and clamps each individually so a big
+  // mode at a high exag setting can't shoot past the konpeito).
+  setHover(segs: HoverSegment[] | null): void {
+    for (const child of this.hoverGroup.children) {
+      const o = child as THREE.Object3D & { geometry?: THREE.BufferGeometry };
+      o.geometry?.dispose();
+    }
+    this.hoverGroup.clear();
+    if (!segs || segs.length === 0) return;
+    for (const seg of segs) {
+      const v = seg.vector_mm;
+      const dist = Math.hypot(v[0], v[1], v[2]);
+      if (dist === 0) continue;
+      const geom = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(v[0], v[1], v[2]),
+      ]);
+      const line = new THREE.Line(geom, this.hoverMat);
+      line.position.set(seg.origin_mm[0], seg.origin_mm[1], seg.origin_mm[2]);
+      line.userData['dist_mm'] = dist;
+      this.hoverGroup.add(line);
+    }
+  }
+
   // Log-space ease toward the target δ-exag. Geometric steps (×1→×10→×100)
   // feel like a uniform "zoom rate" instead of an exponential blast. Returns
   // true if the animation has settled this tick.
@@ -332,13 +370,23 @@ export class LobeRenderer {
     return true;
   }
 
-  // Per-frame crossfade between underflow / normal / overflow. No-op when no
-  // lobes have been built. lobeCeilWorld is computed externally so this class
-  // doesn't need to know about the canvas.
+  // Per-frame crossfade between underflow / normal / overflow, plus hover-line
+  // scaling. lobeCeilWorld is computed externally so this class doesn't need
+  // to know about the canvas.
   apply(lobeCeilWorld: number): void {
+    const scale = this.displayScale_anim;
+
+    // Hover lines: same δ-exag as the lobes, each clamped at lobeCeilWorld so
+    // a big mode at a high exag setting can't shoot past the konpeito. Each
+    // line clamps against its own length.
+    for (const child of this.hoverGroup.children) {
+      const dist = child.userData['dist_mm'] as number | undefined;
+      if (!dist || dist <= 0) continue;
+      child.scale.setScalar(Math.min(scale, lobeCeilWorld / dist));
+    }
+
     if (this.lobeAnims.length === 0) return;
     const floor = this.lobeFloor;
-    const scale = this.displayScale_anim;
     // User's mental model is discrete: {underflow, normal, overflow}. The
     // crossfade weights only exist to smooth the in-flight scale animation;
     // when the scale has settled, snap to the dominant state so the steady

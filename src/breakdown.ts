@@ -1,31 +1,54 @@
 import type { SimResult, DeflectionQueryResult } from './sim/simulate';
-import type { Load, Vec3 } from './sim/problem';
+import type { Load } from './sim/problem';
 import type { Mode } from './sim/compliance';
 import type { LoadProvenance } from './loadsystem';
 
-export type DisplayMode = 'scalar' | 'realistic';
+export type DecompFormat = 'pct' | 'abs';
 
-// Headline δ for the breakdown header and per-node label.
-//   realistic: true δ — max over d of (Σ_p F_p |C^T d|)
-//   scalar:    δ ≲ Σ_{b,m} max(δ_{b,m}) — looser pessimistic bound,
-//              direction-independent (each (b, m) part maxed at its own argmax).
-export function displayDelta(n: DeflectionQueryResult, mode: DisplayMode): number {
-  if (mode === 'realistic') return n.deflection.max().value;
-  return scalarTotal(n);
+// Cursor over a breakdown cell. `keys` is one entry for a single (beam, mode)
+// cell, or all five modes for a per-beam total cell. The scene draws one
+// segment per query node per key.
+export interface HoverHandlers {
+  enter: (keys: Array<{ beamIx: number; mode: Mode }>) => void;
+  leave: () => void;
 }
 
-function scalarTotal(n: DeflectionQueryResult): number {
-  let s = 0;
-  for (const b of n.beamDeflections) {
-    for (const m of b.byMode) s += m.deflection.max().value;
-  }
-  return s;
+// Pessimistic decomposition: Σ_{b,m} max_d δ_{b,m}(d). Each (b, m) is rank-1
+// in our 5-mode scheme, so its argmax direction & magnitude are uniquely
+// defined and the cell value is a literal mm number along a literal world
+// direction. Direction-independent; loosely upper-bounds the realistic δ.
+//
+// Per-load decomposition: at each (b, m)'s own argmax d*_{b,m},
+//   δ_{b,m}(d*) = Σ_p F_p · |C_{b,m,p}^T d*_{b,m}|
+// load p's contribution to the bound is Σ_{b,m} F_p · |C_{b,m,p}^T d*_{b,m}|.
+// All non-negative; per-load and per-(b,m) sums both equal `deltaMax` exactly.
+interface BreakdownRows {
+  deltaMax: number;
+  perBeam: {
+    beamIx: number;
+    bendIxTrans: number;
+    bendIxRot: number;
+    bendIyTrans: number;
+    bendIyRot: number;
+    twist: number;
+    total: number;
+  }[];
+  perLoad: { loadIx: number; delta_mm: number }[];
 }
 
-// Renders the deflection breakdown pane into #info. Plain DOM, no framework.
-// Keep this file impl-agnostic about how SimResult was built: it only reads.
-// `src` is the DSL source — used to label explicit loads with their verbatim
-// `load(...)` text.
+// Order matches column layout in the rendered grid: translation pair, then
+// rotation-transport pair, then twist. Translation columns are the "own-tip
+// motion" of the named beam; rotation columns are how its slope-at-tip
+// propagates downstream through arm. On-beam queries have zero in the three
+// rotation/twist columns (arm = 0 ⇒ no transport).
+const MODE_COLUMNS: Mode[] = [
+  'bendIxTrans',
+  'bendIyTrans',
+  'bendIxRot',
+  'bendIyRot',
+  'twist',
+];
+const MODE_HEADERS = ['bV(tran)', 'bH(tran)', 'bV(rot)', 'bH(rot)', 'tw'];
 
 export function renderBreakdown(
   el: HTMLElement,
@@ -35,8 +58,9 @@ export function renderBreakdown(
   selectedNodeIx: number,
   tipNodeIx: number,
   src: string,
-  mode: DisplayMode,
-  pickedDir: Vec3 | null,
+  format: DecompFormat,
+  onFormatChange: (next: DecompFormat) => void,
+  hover?: HoverHandlers,
 ): void {
   el.innerHTML = '';
 
@@ -48,16 +72,14 @@ export function renderBreakdown(
   const sel = sim.queryResults[selectedNodeIx];
   if (!sel) return;
 
-  const rows = mode === 'realistic'
-    ? realisticRows(sim, sel, selectedNodeIx, pickedDir)
-    : scalarRows(sel);
-
-  // Header: the δ value, then where it's measured. The glyph distinguishes
-  // ≈ (true δ) from ≲ (pessimistic bound); either way the beams/loads below
-  // sum to it.
+  // Headline — realistic (`≈`) translation and rotation worst cases. These are
+  // the true values; the decomposition below them is the pessimistic upper
+  // bound that splits into rank-1 attributable pieces.
   const headline = document.createElement('div');
   headline.className = 'bd-headline';
-  headline.textContent = `δ ${rows.glyph} ${formatMm(rows.deltaMax)}`;
+  headline.textContent =
+    `δ ≈ ${formatMm(sel.deflection.max().value)}` +
+    `    δθ ≈ ${formatAngle(sel.rotation.max().value)}`;
   el.appendChild(headline);
 
   const subhead = document.createElement('div');
@@ -67,36 +89,63 @@ export function renderBreakdown(
     : `${nodeLoc(sel.query.offset_mm)} of beam${sel.query.beamIx}`;
   el.appendChild(subhead);
 
-  // Beams section — before loads: "which beam to stiffen" is the actionable
-  // question. Realistic per-mode values can be negative (a mode that opposes
-  // d*); Scalar values are non-negative. The two bend modes carry an arrow
-  // glyph for the two orthogonal bending planes; torsion is the plain word
-  // "twist" — it has no chirality to point.
+  const rows = decompose(sel);
+
+  // Decomposition section header + pessimistic total + format toggle.
+  const decompHeader = document.createElement('div');
+  decompHeader.className = 'bd-section bd-section-toolbar';
+  const decompTitle = document.createElement('span');
+  decompTitle.textContent = `decomposition  tot ≲ ${formatMm(rows.deltaMax)}`;
+  decompHeader.append(decompTitle, formatToggle(format, onFormatChange));
+  el.appendChild(decompHeader);
+
+  // Beams grid. Five sub-mode columns + total. Each sub-mode cell is one
+  // (beamIx, Mode) pair; the total cell hover fires all five modes of that
+  // beam at once.
   if (rows.perBeam.length > 0) {
-    el.appendChild(sectionHeader('beams'));
     const grid = document.createElement('div');
     grid.className = 'bd-beams';
-    for (const text of ['', 'bend↕', 'bend↔', 'twist', 'total']) {
-      const h = document.createElement('span');
-      h.className = 'hdr';
-      h.textContent = text;
-      grid.append(h);
-    }
+    grid.append(headerCell(''));
+    for (const text of MODE_HEADERS) grid.append(headerCell(text));
+    grid.append(headerCell('total'));
+
     for (const b of rows.perBeam) {
       const name = document.createElement('span');
       name.textContent = `beam${b.beamIx}`;
-      grid.append(
-        name,
-        fracCell(fractionOf(b.bendIx, rows.deltaMax)),
-        fracCell(fractionOf(b.bendIy, rows.deltaMax)),
-        fracCell(fractionOf(b.torsionJ, rows.deltaMax)),
-        fracCell(fractionOf(b.total, rows.deltaMax), true),
-      );
+      grid.append(name);
+
+      const modeValues: number[] = [
+        b.bendIxTrans, b.bendIyTrans,
+        b.bendIxRot,   b.bendIyRot,
+        b.twist,
+      ];
+      modeValues.forEach((val, i) => {
+        const cell = valueCell(val, rows.deltaMax, format);
+        if (hover) {
+          const m = MODE_COLUMNS[i]!;
+          cell.classList.add('hoverable');
+          cell.addEventListener('mouseenter', () => hover.enter([{ beamIx: b.beamIx, mode: m }]));
+          cell.addEventListener('mouseleave', () => hover.leave());
+        }
+        grid.append(cell);
+      });
+
+      const totalCell = valueCell(b.total, rows.deltaMax, format, true);
+      if (hover) {
+        totalCell.classList.add('hoverable');
+        const keys = MODE_COLUMNS.map((mode) => ({ beamIx: b.beamIx, mode }));
+        totalCell.addEventListener('mouseenter', () => hover.enter(keys));
+        totalCell.addEventListener('mouseleave', () => hover.leave());
+      }
+      grid.append(totalCell);
     }
     el.appendChild(grid);
   }
 
-  // Loads section. One shared grid so columns align across rows.
+  // Loads section. Per-load contributions to the same pessimistic total. No
+  // hover here — load attribution doesn't have a clean single direction in
+  // the 5-mode decomposition (its contribution decomposes across (b, m)
+  // again, each with its own direction).
   if (rows.perLoad.length > 0) {
     el.appendChild(sectionHeader('loads'));
     const grid = document.createElement('div');
@@ -120,64 +169,12 @@ export function renderBreakdown(
   }
 }
 
-interface BreakdownRows {
-  /** Headline δ; every contribution below is a fraction of this. */
-  deltaMax: number;
-  /** Header glyph: ≈ for the true value, ≲ for the pessimistic bound. */
-  glyph: string;
-  perBeam: { beamIx: number; bendIx: number; bendIy: number; torsionJ: number; total: number }[];
-  perLoad: { loadIx: number; delta_mm: number }[];
-}
-
-// Realistic: the exact deflection resolved in a direction — the user-picked
-// dir, or the true worst case d* when none is picked. Apply that direction's
-// worst-case forces and read the determined contributions projected onto it —
-// signed, summing exactly to δ(dir).
-function realisticRows(
-  sim: SimResult,
-  sel: DeflectionQueryResult,
-  selIx: number,
-  pickedDir: Vec3 | null,
-): BreakdownRows {
-  let dir: Vec3;
-  let deltaMax: number;
-  if (pickedDir) {
-    dir = pickedDir;
-    deltaMax = sel.deflection.at(pickedDir);
-  } else {
-    const m = sel.deflection.max();
-    dir = m.dir;
-    deltaMax = m.value;
-  }
-  const dd = sim.under(sel.forcesAt(dir)).queryResults[selIx];
-  if (!dd) return { deltaMax, glyph: '≈', perBeam: [], perLoad: [] };
-  return {
-    deltaMax,
-    glyph: '≈',
-    perBeam: dd.perBeam.map((b) => ({
-      beamIx: b.beamIx,
-      bendIx: modeAlong(b.byMode, 'bendIx', dir),
-      bendIy: modeAlong(b.byMode, 'bendIy', dir),
-      torsionJ: modeAlong(b.byMode, 'torsionJ', dir),
-      total: dot(dir, b.vector_mm),
-    })),
-    perLoad: dd.perLoad.map((pl) => ({ loadIx: pl.loadIx, delta_mm: dot(dir, pl.vector_mm) })),
-  };
-}
-
-// Scalar: each (beam, mode) part is independently maxed over its own d, then
-// summed. A pessimistic upper bound on the true δ — Σ_{b,m} max ≥ max(Σ_{b,m}) —
-// and direction-independent (no shared d).
-//
-// Per-load decomposition: at each (b, m)'s own argmax d*_{b,m},
-//   δ_{b,m}(d*) = Σ_p F_p · |C_{b,m,p}^T d*_{b,m}|
-// so load p's contribution to the bound is Σ_{b,m} F_p · |C_{b,m,p}^T d*_{b,m}|
-// (a swap of sums). All non-negative; per-load and per-(b,m) sums both equal
-// the headline exactly.
-function scalarRows(sel: DeflectionQueryResult): BreakdownRows {
+function decompose(sel: DeflectionQueryResult): BreakdownRows {
   const perLoadMap = new Map<number, number>();
   const perBeam = sel.beamDeflections.map((b) => {
-    const at = (mode: Mode) => {
+    // Each sub-mode is rank-1, so max() returns its single argmax direction
+    // and magnitude. Per-load attribution evaluates at that argmax.
+    const at = (mode: Mode): number => {
       const bm = b.byMode.find((x) => x.mode === mode);
       if (!bm) return 0;
       const { dir, value } = bm.deflection.max();
@@ -186,30 +183,55 @@ function scalarRows(sel: DeflectionQueryResult): BreakdownRows {
       }
       return value;
     };
-    const bendIx = at('bendIx');
-    const bendIy = at('bendIy');
-    const torsionJ = at('torsionJ');
-    return { beamIx: b.beamIx, bendIx, bendIy, torsionJ, total: bendIx + bendIy + torsionJ };
+    const bendIxTrans = at('bendIxTrans');
+    const bendIxRot   = at('bendIxRot');
+    const bendIyTrans = at('bendIyTrans');
+    const bendIyRot   = at('bendIyRot');
+    const twist       = at('twist');
+    return {
+      beamIx: b.beamIx,
+      bendIxTrans, bendIxRot, bendIyTrans, bendIyRot, twist,
+      total: bendIxTrans + bendIxRot + bendIyTrans + bendIyRot + twist,
+    };
   });
   const deltaMax = perBeam.reduce((s, b) => s + b.total, 0);
   const perLoad = [...perLoadMap.entries()]
     .sort(([a], [z]) => a - z)
     .map(([loadIx, delta_mm]) => ({ loadIx, delta_mm }));
-  return { deltaMax, glyph: '≲', perBeam, perLoad };
+  return { deltaMax, perBeam, perLoad };
 }
 
-// Signed contribution of one mode along `dir` — 0 if the beam doesn't excite it.
-function modeAlong(
-  byMode: { mode: Mode; vector_mm: Vec3 }[],
-  mode: Mode,
-  dir: Vec3,
-): number {
-  const m = byMode.find((x) => x.mode === mode);
-  return m ? dot(dir, m.vector_mm) : 0;
+function headerCell(text: string): HTMLElement {
+  const h = document.createElement('span');
+  h.className = 'hdr';
+  h.textContent = text;
+  return h;
 }
 
-function dot(a: Vec3, b: Vec3): number {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+function valueCell(value_mm: number, total_mm: number, format: DecompFormat, isTotal = false): HTMLElement {
+  const cell = document.createElement('span');
+  cell.className = isTotal ? 'frac total' : 'frac';
+  cell.textContent = format === 'pct'
+    ? formatPct(fractionOf(value_mm, total_mm))
+    : formatMm(value_mm);
+  return cell;
+}
+
+function formatToggle(current: DecompFormat, onChange: (next: DecompFormat) => void): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = 'bd-fmt-toggle';
+  const opts: { val: DecompFormat; label: string }[] = [
+    { val: 'pct', label: 'pct' },
+    { val: 'abs', label: 'abs' },
+  ];
+  for (const o of opts) {
+    const btn = document.createElement('button');
+    btn.textContent = o.label;
+    btn.className = o.val === current ? 'active' : '';
+    btn.addEventListener('click', () => onChange(o.val));
+    wrap.appendChild(btn);
+  }
+  return wrap;
 }
 
 function sectionHeader(text: string): HTMLElement {
@@ -260,15 +282,6 @@ function compact(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-// One right-aligned percentage cell in the beams grid. `total` cells render
-// muted, matching the header.
-function fracCell(frac: number, total = false): HTMLElement {
-  const cell = document.createElement('span');
-  cell.className = total ? 'frac total' : 'frac';
-  cell.textContent = formatPct(frac);
-  return cell;
-}
-
 export function formatMm(v: number): string {
   if (v === 0) return '0';
   const a = Math.abs(v);
@@ -282,11 +295,19 @@ export function formatMm(v: number): string {
     : `${rounded} mm`;
 }
 
+// Linearized rotation in degrees with 2 significant figures. The underlying
+// math is in rad; deg is the display unit because that's what users name
+// rotation tolerances in (mrad would be the alternative for optics).
+function formatAngle(rad: number): string {
+  if (rad === 0) return '0°';
+  const deg = rad * (180 / Math.PI);
+  return `${sig2(deg)}°`;
+}
+
 function formatLoad(N: number): string {
   return `${N.toFixed(2)} N`;
 }
 
-// Display fraction of a signed contribution against the query's δ_max.
 function fractionOf(part: number, whole: number): number {
   return whole > 1e-30 ? part / whole : 0;
 }

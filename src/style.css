@@ -58,38 +58,6 @@ html, body {
   overflow: hidden;
 }
 
-#mode-toggle {
-  display: flex;
-  gap: 4px;
-  padding: 6px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-app);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  user-select: none;
-}
-
-#mode-toggle button {
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-fg);
-  padding: 3px 10px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font: inherit;
-  line-height: 1;
-}
-
-#mode-toggle button:hover {
-  background: var(--bg-hover);
-}
-
-#mode-toggle button.active {
-  background: var(--text-fg);
-  color: var(--bg-panel);
-  border-color: var(--text-fg);
-}
-
 #info {
   flex: 2 1 0;
   min-height: 0;
@@ -102,21 +70,6 @@ html, body {
   background: var(--bg-app);
   color: var(--text-fg);
   white-space: pre-wrap;
-}
-
-#picker-host {
-  padding: 10px 12px 0;
-  background: var(--bg-app);
-  border-top: 1px solid var(--border);
-}
-
-.bd-picker {
-  display: block;
-  width: 100%;
-  aspect-ratio: 2 / 1;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: crosshair;
 }
 
 #info .bd-headline {
@@ -136,9 +89,43 @@ html, body {
 
 #info .bd-beams {
   display: grid;
-  grid-template-columns: 1fr auto auto auto auto;
-  column-gap: 12px;
+  /* beam name + 5 sub-modes + total */
+  grid-template-columns: 1fr auto auto auto auto auto auto;
+  column-gap: 10px;
   color: var(--text-fg);
+}
+
+#info .bd-section.bd-section-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#info .bd-fmt-toggle {
+  display: inline-flex;
+  gap: 2px;
+  user-select: none;
+}
+
+#info .bd-fmt-toggle button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+#info .bd-fmt-toggle button:hover {
+  background: var(--bg-hover);
+}
+
+#info .bd-fmt-toggle button.active {
+  background: var(--text-fg);
+  color: var(--bg-panel);
 }
 
 #info .bd-beams .hdr,
@@ -163,6 +150,19 @@ html, body {
 #info .bd-beams .frac,
 #info .bd-loads .frac {
   text-align: right;
+}
+
+/* Scalar-mode (beam, mode) cells: subtle hover highlight signals the cell is
+   cursor-interactive. Realistic-mode cells don't get .hoverable so they
+   stay inert. */
+#info .bd-beams .frac.hoverable {
+  cursor: default;
+  user-select: none;
+}
+
+#info .bd-beams .frac.hoverable:hover {
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
 }
 
 #info .bd-loads .frac {

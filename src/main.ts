@@ -5,9 +5,9 @@ import { semcheck } from './dsl/semcheck';
 import { walk } from './walker';
 import { buildLoadSystem, simErrorToDiagnostic } from './loadsystem';
 import { simulate, type SimResult } from './sim/simulate';
-import type { Vec3 } from './sim/problem';
-import { renderBreakdown, type DisplayMode } from './breakdown';
-import { DirPicker } from './picker';
+import { renderBreakdown, type DecompFormat, type HoverHandlers } from './breakdown';
+import type { Mode } from './sim/compliance';
+import type { HoverSegment } from './scene/lobe';
 
 const INITIAL_SRC = `support(single)
 mass_accel(2G)
@@ -20,8 +20,6 @@ const editorEl = document.getElementById('editor') as HTMLElement;
 const infoEl = document.getElementById('info') as HTMLElement;
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const scaleOverlayEl = document.getElementById('scale-overlay') as HTMLElement;
-const modeToggleEl = document.getElementById('mode-toggle') as HTMLElement;
-const pickerHostEl = document.getElementById('picker-host') as HTMLElement;
 
 let currentScale = 1;
 let lastSrc = INITIAL_SRC;
@@ -29,10 +27,10 @@ let cursorOffset = 0;
 let editorFocused = false;
 let selectedKey: { beamIx: number; offset_mm: number } | null = null;
 let lastSim: SimResult | null = null;
-let mode: DisplayMode = 'realistic';
-// User-picked direction for the selected node (Realistic mode) — null means
-// decompose at the auto worst-case d*. Reset whenever the selection changes.
-let selectedDir: Vec3 | null = null;
+let decompFormat: DecompFormat = 'pct';
+// Cursor over breakdown cell(s) — one (b, m) for a sub-mode cell, five for a
+// per-beam total. Drives the scene's hover overlay; null when cursor is off.
+let hoverKeys: { beamIx: number; mode: Mode }[] | null = null;
 
 // Last full render's parse/sim outputs — redraw() draws from this without
 // re-parsing. render() refreshes it; redraw()/redrawScene() consume it.
@@ -49,7 +47,6 @@ const scene = new Scene(canvas, (nodeIx) => {
   const n = lastSim?.queryResults[nodeIx];
   if (!n) return;
   selectedKey = { beamIx: n.query.beamIx, offset_mm: n.query.offset_mm };
-  selectedDir = null;
   // Auto-pick the biggest non-overflown δ-exag for this node so a click is
   // also a "show me this node clearly" gesture. Initial tip selection stays
   // at ×1 (this callback only fires on user picks, not on default-select).
@@ -62,9 +59,40 @@ const scene = new Scene(canvas, (nodeIx) => {
   redraw();
 });
 
-const picker = new DirPicker();
-pickerHostEl.appendChild(picker.el);
-picker.onPick = onPickDir;
+const hoverHandlers: HoverHandlers = {
+  enter(keys) {
+    hoverKeys = keys;
+    scene.setHoverSegment(computeHoverSegments());
+  },
+  leave() {
+    hoverKeys = null;
+    scene.setHoverSegment(null);
+  },
+};
+
+// Resolve the hovered (beam, mode) keys to concrete segments at *every* query
+// node in the chain. Each sub-mode is rank-1, so each (query, beam, mode)
+// gives a single direction + magnitude; pessimistic decomposition has no
+// shared loads / shared direction across queries, so we emit them all.
+function computeHoverSegments(): HoverSegment[] | null {
+  if (!hoverKeys || !lastSim) return null;
+  const segs: HoverSegment[] = [];
+  for (const node of lastSim.queryResults) {
+    for (const key of hoverKeys) {
+      const bd = node.beamDeflections.find((b) => b.beamIx === key.beamIx);
+      if (!bd) continue;
+      const bm = bd.byMode.find((m) => m.mode === key.mode);
+      if (!bm) continue;
+      const { dir, value } = bm.deflection.max();
+      if (value === 0) continue;
+      segs.push({
+        origin_mm: node.pos_mm,
+        vector_mm: [dir[0] * value, dir[1] * value, dir[2] * value],
+      });
+    }
+  }
+  return segs.length ? segs : null;
+}
 
 function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
   if (selectedKey) {
@@ -79,7 +107,6 @@ function resolveSelectedNodeIx(sim: SimResult, tipQueryIx: number): number {
 
 // Full pass: parse → simulate. Caches the result in `last`, then draws.
 function render() {
-  selectedDir = null;
   const { structure, diagnostics: pd } = parse(lastSrc);
   const sd = semcheck(structure);
   const { beams, diagnostics: wd } = walk(structure);
@@ -104,59 +131,51 @@ function render() {
 }
 
 // Redraw scene + breakdown from the last render — no re-parse / re-simulate.
-// Used when only display state changed (selection, mode).
 function redraw() {
   redrawScene();
   redrawBreakdown();
 }
 
-// Just the breakdown pane + direction picker. The dir-pick path uses this —
-// the Realistic lobe doesn't move, so the 3D scene is left untouched.
 function redrawBreakdown() {
   if (!last) return;
+  // The breakdown DOM is wiped & replaced below; old cells' mouseleave won't
+  // fire on detached elements. Reset hover ourselves; mouseenter on new cells
+  // re-establishes it.
+  hoverKeys = null;
+  scene.setHoverSegment(null);
   const { ls, out } = last;
   if (out.kind === 'error') {
-    pickerHostEl.style.display = 'none';
     renderBreakdown(
-      infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc, mode, selectedDir,
+      infoEl, null, ls.problem.loads, ls.loadProvenance, -1, -1, lastSrc,
+      decompFormat, onFormatChange,
     );
   } else {
     const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
-    const sel = out.queryResults[selectedNodeIx];
-    if (mode === 'realistic' && sel) {
-      pickerHostEl.style.display = '';
-      picker.setData(sel.deflection);
-      picker.setPick(selectedDir);
-    } else {
-      pickerHostEl.style.display = 'none';
-    }
     renderBreakdown(
-      infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc, mode,
-      selectedDir,
+      infoEl, out, ls.problem.loads, ls.loadProvenance, selectedNodeIx, ls.tipQueryIx, lastSrc,
+      decompFormat, onFormatChange, hoverHandlers,
     );
   }
   updateScaleButtons();
 }
 
-// Just the 3D scene.
+function onFormatChange(next: DecompFormat) {
+  if (next === decompFormat) return;
+  decompFormat = next;
+  redrawBreakdown();
+}
+
 function redrawScene() {
   if (!last) return;
   const { beams, ls, out, currentBeamIx } = last;
   if (out.kind === 'error') {
-    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1, mode);
+    scene.update(beams, undefined, ls.supportKind, { currentBeamIx, focused: editorFocused }, -1);
   } else {
     const selectedNodeIx = resolveSelectedNodeIx(out, ls.tipQueryIx);
     scene.update(
-      beams, out, ls.supportKind, { currentBeamIx, focused: editorFocused }, selectedNodeIx, mode,
+      beams, out, ls.supportKind, { currentBeamIx, focused: editorFocused }, selectedNodeIx,
     );
   }
-}
-
-// Direction picked on the Realistic-mode equirectangular picker — re-decompose
-// the breakdown at it. The 3D scene is unaffected, so skip redrawScene().
-function onPickDir(d: Vec3) {
-  selectedDir = d;
-  redrawBreakdown();
 }
 
 function findBeamAtOffset(defs: BeamDef[], offset: number): number | null {
@@ -174,12 +193,6 @@ function updateScaleButtons() {
   }
 }
 
-function updateModeButtons() {
-  for (const btn of modeToggleEl.querySelectorAll('button')) {
-    btn.classList.toggle('active', btn.dataset['mode'] === mode);
-  }
-}
-
 scaleOverlayEl.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('button');
   if (!btn) return;
@@ -188,17 +201,6 @@ scaleOverlayEl.addEventListener('click', (e) => {
   currentScale = s;
   updateScaleButtons();
   scene.setDisplayScale(s);
-});
-
-modeToggleEl.addEventListener('click', (e) => {
-  const btn = (e.target as HTMLElement).closest('button');
-  if (!btn) return;
-  const m = btn.dataset['mode'] as DisplayMode;
-  if (m === mode) return;
-  mode = m;
-  selectedDir = null;
-  updateModeButtons();
-  redraw();
 });
 
 const editor = new Editor(
@@ -215,7 +217,6 @@ const editor = new Editor(
   },
 );
 
-updateModeButtons();
 render();
 
 // Console hook: window.dbg.{scene, sim, scale, ...}. Live objects (not a
@@ -224,7 +225,7 @@ render();
   get scene() { return scene; },
   get sim()   { return lastSim; },
   get scale() { return currentScale; },
-  get mode()  { return mode; },
-  get selectedDir() { return selectedDir; },
   get selectedKey() { return selectedKey; },
+  get hoverKeys() { return hoverKeys; },
+  get decompFormat() { return decompFormat; },
 };
