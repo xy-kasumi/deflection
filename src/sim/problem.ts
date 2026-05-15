@@ -43,8 +43,8 @@ export interface Beam {
 }
 
 /**
- * A load fully resolved to a world-force magnitude. Mass·acceleration body
- * loads are pre-expanded into ordinary `Load`s by the caller.
+ * A load fully resolved to a world-force magnitude.
+ * Represents a worst force within the sphere (|F| <= Fmax).
  */
 export interface Load {
   beamIx: number;
@@ -58,9 +58,18 @@ export interface DeflectionQuery {
   offset_mm: number;
 }
 
+/**
+ * Beam chain system to solve.
+ * Mass is not taken into account. (caller can simulate it to some extend by adding Load to center of gravity)
+ */
 export interface Problem {
   beams: Beam[];
   loads: Load[];
   queries: DeflectionQuery[];
+
+  /**
+   * Decides how beam[0] is constrained.
+   * single: origin is clamped (fixed). both: origin & end is clamped (fixed).
+   */
   support: 'single' | 'both';
 }
