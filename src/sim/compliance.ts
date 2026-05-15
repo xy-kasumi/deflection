@@ -1,12 +1,6 @@
-import type { Beam, Frame, Problem, Vec3 } from './problem';
+import type { Beam, Frame, Problem } from './problem';
+import type { Vec3, Mat3 } from './math';
 import type { SimError } from './simulate';
-
-/** 3×3 row-major matrix: [m00, m01, m02, m10, m11, m12, m20, m21, m22]. */
-export type Mat3 = [
-  number, number, number,
-  number, number, number,
-  number, number, number,
-];
 
 /**
  * Per-beam deflection sub-modes, each rank-1 at any query: the (deflection

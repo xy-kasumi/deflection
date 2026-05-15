@@ -15,8 +15,8 @@ import type {
   Material,
   Problem,
   Section,
-  Vec3,
 } from './sim/problem';
+import type { Vec3 } from './sim/math';
 import type { SimError } from './sim/simulate';
 
 // Per-load provenance, parallel to `Problem.loads`. The sim result indexes

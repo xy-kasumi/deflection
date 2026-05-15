@@ -3,7 +3,8 @@
 // it runs at all proves sim/ stands alone as a library.
 // Run with: npx tsx scripts/smoke-compliance.ts
 
-import type { Beam, Problem, Vec3 } from '../src/sim/problem';
+import type { Beam, Problem } from '../src/sim/problem';
+import type { Vec3 } from '../src/sim/math';
 import { buildCompliances } from '../src/sim/compliance';
 import { simulate } from '../src/sim/simulate';
 import type { Mode } from '../src/sim/compliance';

@@ -1,12 +1,12 @@
-// sim/'s input contract — a self-contained "deflection problem". Pure data,
-// zero imports. Standard units: mm, N, MPa.
+// sim/'s input contract — a self-contained "deflection problem". Standard
+// units: mm, N, MPa. Only depends on the leaf math types.
 //
 // Preconditions (validated by `simulate`, see simulate.ts):
 //   - the chain is serial: beams[i] hangs off beams[i-1].
 //   - beams[0].frame.origin_mm is the clamp, at world [0, 0, 0].
 //   - beams[i>0].frame.origin_mm lies on beam i-1's axis within [0, length].
 
-export type Vec3 = [number, number, number];
+import type { Vec3 } from './math';
 
 /**
  * Beam-local frame expressed in world coords. (ex, ey) span the cross-sectional

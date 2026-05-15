@@ -1,7 +1,7 @@
-import type { DeflectionQuery, Problem, Vec3 } from './problem';
+import type { DeflectionQuery, Problem } from './problem';
 import { buildCompliances } from './compliance';
-import type { Mode } from './compliance';
-import { directionalFor, rotationFor, beamDirectionals, type Directional } from './directional';
+import type { Compliances, Mode } from './compliance';
+import { makeDirectional, type Directional, type Vec3, type Mat3 } from './math';
 
 export type SimOutcome = SimResult | SimError;
 
@@ -48,6 +48,87 @@ export interface BeamDeflection {
      */
     perLoad: { loadIx: number; deflection_mm: Directional }[];
   }[];
+}
+
+/** Build a Directional for query q from whole-structure compliance totals. */
+function directionalFor(c: Compliances, queryIx: number): Directional {
+  const ts: Mat3[] = [];
+  for (const t of c.totals) {
+    if (t.queryIx !== queryIx) continue;
+    ts.push(scaleMat(transpose(t.C), c.loadFmax_N[t.loadIx] ?? 0));
+  }
+  return makeDirectional(ts);
+}
+
+/**
+ * Rotation Directional at query q from whole-structure rotation totals. d is
+ * a unit rotation axis; the returned value is the linearized worst-case
+ * rotation magnitude about that axis (rad).
+ */
+function rotationFor(c: Compliances, queryIx: number): Directional {
+  const ts: Mat3[] = [];
+  for (const t of c.rotationTotals) {
+    if (t.queryIx !== queryIx) continue;
+    ts.push(scaleMat(transpose(t.C), c.loadFmax_N[t.loadIx] ?? 0));
+  }
+  return makeDirectional(ts);
+}
+
+/**
+ * Per-(beam, mode) Directionals at query q, worst-cased independently. These
+ * do NOT sum to the whole-structure δ_q (Σ ≥ δ, triangle inequality); each is
+ * honest only on its own. Per-mode `perLoad` keeps single-load Directionals
+ * so callers can attribute the (b, m) argmax back to loads.
+ */
+function beamDirectionals(c: Compliances, queryIx: number): BeamDeflection[] {
+  const byBeam = new Map<number, Map<Mode, Map<number, Mat3>>>();
+  for (const e of c.entries) {
+    if (e.queryIx !== queryIx) continue;
+    let perMode = byBeam.get(e.beamIx);
+    if (!perMode) { perMode = new Map(); byBeam.set(e.beamIx, perMode); }
+    let pm = perMode.get(e.mode);
+    if (!pm) { pm = new Map(); perMode.set(e.mode, pm); }
+    accumMat(pm, e.loadIx, e.C);
+  }
+
+  return [...byBeam.entries()]
+    .sort(([a], [z]) => a - z)
+    .map(([beamIx, perMode]) => ({
+      beamIx,
+      byMode: [...perMode.entries()].map(([mode, m]) => {
+        const sorted = [...m.entries()].sort(([a], [z]) => a - z);
+        const terms = sorted.map(([loadIx, C]) =>
+          scaleMat(transpose(C), c.loadFmax_N[loadIx] ?? 0),
+        );
+        return {
+          mode,
+          deflection_mm: makeDirectional(terms),
+          perLoad: sorted.map(([loadIx], i) => ({
+            loadIx,
+            deflection_mm: makeDirectional([terms[i]!]),
+          })),
+        };
+      }),
+    }));
+}
+
+// Accumulate C into the per-load matrix bucket (creating a zero one if absent).
+function accumMat(m: Map<number, Mat3>, loadIx: number, C: Mat3): void {
+  let cur = m.get(loadIx);
+  if (!cur) { cur = [0, 0, 0, 0, 0, 0, 0, 0, 0]; m.set(loadIx, cur); }
+  for (let i = 0; i < 9; i++) (cur[i] as number) += C[i] as number;
+}
+
+function transpose(M: Mat3): Mat3 {
+  return [M[0], M[3], M[6], M[1], M[4], M[7], M[2], M[5], M[8]];
+}
+
+function scaleMat(M: Mat3, s: number): Mat3 {
+  return [
+    M[0] * s, M[1] * s, M[2] * s,
+    M[3] * s, M[4] * s, M[5] * s,
+    M[6] * s, M[7] * s, M[8] * s,
+  ];
 }
 
 // Connectivity tolerance: walker-built chains are exact to float precision, so

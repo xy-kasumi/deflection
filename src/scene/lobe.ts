@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
-import { delta, capTermsForUniform, type Directional } from '../sim/directional';
+import { evaluate, capTermsForUniform, type Directional } from '../sim/math';
 import { formatMm } from '../breakdown';
 import { COLOR, MOTION, hexToVec3 } from './tokens';
 
@@ -23,7 +23,7 @@ const MAX_LOADS = 16;
 // Per-vertex CPU spot-check: K randomly chosen vertices carry a CPU-computed
 // δ, the shader writes 1.0 into vDiscrep when its own δ differs by more than
 // SPOTCHECK_TOL_REL relative. Fragment shader paints those vertices solid
-// magenta — bright halos = shader/CPU disagree, see [[delta]] in directional.ts.
+// magenta — bright halos = shader/CPU disagree, see [[evaluate]] in math.ts.
 //
 // K random (not strided) so the icosphere's 20-fold symmetry can't accidentally
 // align with sample placement. Density target: ~14° mean spacing on S² — dense
@@ -55,7 +55,7 @@ const LOBE_KONPEITO_FRAC  = 0.5;
 // non-overflown by iterating once.
 const DISPLAY_SCALES = [1, 10, 100, 1000] as const;
 
-// Vertex shader — GLSL TWIN of `delta(d_unit, terms)` in src/sim/directional.ts.
+// Vertex shader — GLSL TWIN of `evaluate(d_unit, terms)` in src/sim/math.ts.
 // Must stay in sync; the cpuDelta attribute carries CPU truth at K_SPOTCHECK
 // random vertices and the fragment shader halo-paints any per-vertex divergence.
 //
@@ -65,8 +65,7 @@ const DISPLAY_SCALES = [1, 10, 100, 1000] as const;
 // vertex to its world location.
 const LOBE_VS = `
 precision highp float;
-uniform mat3 Ns[${MAX_LOADS}];
-uniform float Fs[${MAX_LOADS}];
+uniform mat3 Ms[${MAX_LOADS}];
 uniform int nLoads;
 uniform float dMaxInv;
 attribute float cpuDelta;
@@ -77,8 +76,7 @@ void main() {
   float deltaSh = 0.0;
   for (int i = 0; i < ${MAX_LOADS}; i++) {
     if (i >= nLoads) break;
-    vec3 v = Ns[i] * d;
-    deltaSh += Fs[i] * length(v);
+    deltaSh += length(Ms[i] * d);
   }
   vT = deltaSh * dMaxInv;
   vDiscrep = 0.0;
@@ -446,7 +444,7 @@ export function computeLobeCeilWorld(canvas: HTMLCanvasElement, scaleHalf: numbe
 // Geometry: shares SHARED_POS_ATTR (one upload per page) plus a per-lobe
 // cpuDelta attribute carrying CPU truth at K_SPOTCHECK random vertices. Any
 // shader-CPU disagreement halo-paints those vertices magenta — see the LOBE_VS
-// header for the contract with delta() in directional.ts.
+// header for the contract with evaluate() in math.ts.
 //
 // Built at unit δ-exag: the shader's radial deformation equals δ in mm. The
 // caller drives mesh.scale to apply the animated δ-exag.
@@ -475,53 +473,48 @@ function buildNormalLobe(dir: Directional, reuseMat?: THREE.ShaderMaterial): THR
       SHARED_POS_ATTR.getY(idx),
       SHARED_POS_ATTR.getZ(idx),
     ];
-    cpu[idx] = delta(d, terms);
+    cpu[idx] = evaluate(d, terms);
   }
   geom.setAttribute('cpuDelta', new THREE.BufferAttribute(cpu, 1));
   // Positions are unit-radius; shader scales radially by δ ≤ dMax. Use dMax
   // for frustum culling so the (shader-deformed) extent stays correct.
   geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), dMax || 1);
 
-  // Pack {N, F} into uniform arrays. THREE.Matrix3.set takes row-major args,
-  // matching how Mat3 is laid out in directional.ts; the GLSL `Ns[i] * d`
-  // multiply then gives N·d in the same sense as the CPU's matVec(N, d).
+  // Pack M matrices into the uniform array. THREE.Matrix3.set takes row-major
+  // args, matching how Mat3 is laid out in math.ts; the GLSL `Ms[i] * d`
+  // multiply then gives M·d in the same sense as the CPU's matVec(M, d).
+  // Unused slots are zeroed so a stale shader iteration (if any) sees no
+  // contribution.
   let mat: THREE.ShaderMaterial;
   if (reuseMat) {
     mat = reuseMat;
-    const NsArr = mat.uniforms['Ns']!.value as THREE.Matrix3[];
-    const FsArr = mat.uniforms['Fs']!.value as number[];
+    const MsArr = mat.uniforms['Ms']!.value as THREE.Matrix3[];
     for (let i = 0; i < MAX_LOADS; i++) {
       if (i < nLoads) {
-        const M = terms[i]!.N;
-        NsArr[i]!.set(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7], M[8]);
-        FsArr[i] = terms[i]!.F_N;
+        const M = terms[i]!;
+        MsArr[i]!.set(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7], M[8]);
       } else {
-        NsArr[i]!.identity();
-        FsArr[i] = 0;
+        MsArr[i]!.set(0, 0, 0, 0, 0, 0, 0, 0, 0);
       }
     }
     mat.uniforms['nLoads']!.value = nLoads;
     mat.uniforms['dMaxInv']!.value = dMaxInv;
     mat.uniforms['isIsotropic']!.value = isIsotropic ? 1 : 0;
   } else {
-    const NsUniform: THREE.Matrix3[] = [];
-    const FsUniform: number[] = [];
+    const MsUniform: THREE.Matrix3[] = [];
     for (let i = 0; i < MAX_LOADS; i++) {
       const m = new THREE.Matrix3();
       if (i < nLoads) {
-        const M = terms[i]!.N;
+        const M = terms[i]!;
         m.set(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7], M[8]);
-        FsUniform.push(terms[i]!.F_N);
       } else {
-        m.identity();
-        FsUniform.push(0);
+        m.set(0, 0, 0, 0, 0, 0, 0, 0, 0);
       }
-      NsUniform.push(m);
+      MsUniform.push(m);
     }
     mat = new THREE.ShaderMaterial({
       uniforms: {
-        Ns: { value: NsUniform },
-        Fs: { value: FsUniform },
+        Ms: { value: MsUniform },
         nLoads: { value: nLoads },
         dMaxInv: { value: dMaxInv },
         alphaMul: { value: 1 },
