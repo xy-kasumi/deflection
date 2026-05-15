@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
-import { COLOR, VU, MOTION } from './tokens';
+import { COLOR, VU, MOTION, easeToward } from './tokens';
 import { Labels } from './labels';
 import { LobeRenderer, computeLobeCeilWorld } from './lobe';
 import { StickRenderer, type Stick } from './stick';
@@ -230,13 +230,12 @@ export class Scene {
 
       if (this.dragging) {
         const prevYaw = this.yaw;
-        const alpha = 1 - Math.exp(-dt * MOTION.dragSmoothK);
-        this.yaw += (this.targetYaw - this.yaw) * alpha;
+        this.yaw = easeToward(this.yaw, this.targetYaw, dt, MOTION.dragSmoothK);
         this.yawVelocity = (this.yaw - prevYaw) / Math.max(dt, 1e-3);
       } else {
         this.yaw += this.yawVelocity * dt;
         this.targetYaw = this.yaw;
-        this.yawVelocity *= Math.exp(-dt * MOTION.dragDecayK);
+        this.yawVelocity = easeToward(this.yawVelocity, 0, dt, MOTION.dragDecayK);
         if (Math.abs(this.yawVelocity) < MOTION.dragStopVel) this.yawVelocity = 0;
       }
 

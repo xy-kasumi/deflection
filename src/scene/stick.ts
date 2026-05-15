@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Vec3 } from '../walker';
-import { COLOR, MOTION } from './tokens';
+import { COLOR, MOTION, easeToward } from './tokens';
 
 // One straight segment anchored at a query node, oriented along the unit
 // argmax direction d* of a single (beam, mode) part, half-length δ_{b,m} (mm)
@@ -102,8 +102,7 @@ export class StickRenderer {
     const tgt = this.fade_target;
     const cur = this.fade_anim;
     if (cur === tgt) return true;
-    const alpha = 1 - Math.exp(-dt * MOTION.stickFadeK);
-    let next = cur + (tgt - cur) * alpha;
+    let next = easeToward(cur, tgt, dt, MOTION.stickFadeK);
     if (Math.abs(next - tgt) < MOTION.stickFadeSettle) next = tgt;
     this.fade_anim = next;
     if (next === 0 && tgt === 0) this.disposeChildren();

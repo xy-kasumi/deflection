@@ -35,7 +35,7 @@ export const VU = {
   stickR: 0.4,         // contribution-stick dia = 0.8u — chunky enough to read past lobe shell and beam
 } as const;
 
-// Easing time-constants for the 1/τ form  alpha = 1 - exp(-dt * K).
+// Easing time-constants in the 1/τ form consumed by `easeToward` below.
 // dragSmoothK / dragDecayK govern the yaw drag; scaleK governs the log-space
 // δ-exag ease. dragStopVel snaps tiny drift to zero so the anim loop can park.
 // scaleSettleLog is the tolerance for "settled" in log-units.
@@ -51,6 +51,12 @@ export const MOTION = {
   stickFadeK: 16,
   stickFadeSettle: 1e-3,
 } as const;
+
+// Frame-rate-independent ease toward target. At dt = 1/k, ~63% of the gap
+// closes; tune via MOTION.*K. Pass target = 0 for pure decay.
+export function easeToward(current: number, target: number, dt: number, k: number): number {
+  return current + (target - current) * (1 - Math.exp(-dt * k));
+}
 
 // Convert a 0xRRGGBB color token to GLSL `vec3(r, g, b)` literal text.
 // Lets the lobe shader paint from COLOR instead of duplicating hex values.

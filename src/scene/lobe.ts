@@ -3,7 +3,7 @@ import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
 import { evaluate, capTermsForUniform, type Directional } from '../sim/math';
 import { formatMm } from '../breakdown';
-import { COLOR, MOTION, hexToVec3 } from './tokens';
+import { COLOR, MOTION, easeToward, hexToVec3 } from './tokens';
 
 // Normal-lobe rendering. Filled mesh with per-vertex t = δ/δ_max. The fragment
 // shader paints a faint orange shell below t = CAP_LO and an opaque red cap
@@ -317,8 +317,7 @@ export class LobeRenderer {
     const logT = Math.log(this.displayScale_target);
     const logC = Math.log(this.displayScale_anim);
     if (Math.abs(logT - logC) > MOTION.scaleSettleLog) {
-      const alpha = 1 - Math.exp(-dt * MOTION.scaleK);
-      this.displayScale_anim = Math.exp(logC + (logT - logC) * alpha);
+      this.displayScale_anim = Math.exp(easeToward(logC, logT, dt, MOTION.scaleK));
       return false;
     }
     if (this.displayScale_anim !== this.displayScale_target) {
