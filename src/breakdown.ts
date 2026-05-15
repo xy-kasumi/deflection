@@ -354,10 +354,12 @@ function compact(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
+// Below 1 nm everything is FP noise — collapse to exact 0.
+const ZERO_EPS_MM = 1e-6;
+
 export function formatMm(v: number): string {
-  if (v === 0) return '0';
-  const a = Math.abs(v);
-  const exp = Math.floor(Math.log10(a));
+  if (Math.abs(v) < ZERO_EPS_MM) return '0';
+  const exp = Math.floor(Math.log10(Math.abs(v)));
   if (exp < -4) return `${v.toExponential(1)} mm`;
   const decimals = 1 - exp;
   const scale = 10 ** decimals;
@@ -369,10 +371,9 @@ export function formatMm(v: number): string {
 
 // Bare number, scaled to the section's unit.
 function formatNum(v_mm: number, unit: LengthUnit): string {
+  if (Math.abs(v_mm) < ZERO_EPS_MM) return '0';
   const v = unit === 'mm' ? v_mm : v_mm * 1000;
-  if (v === 0) return '0';
-  const a = Math.abs(v);
-  const exp = Math.floor(Math.log10(a));
+  const exp = Math.floor(Math.log10(Math.abs(v)));
   if (exp < -4) return v.toExponential(1);
   const decimals = Math.max(0, 1 - exp);
   return v.toFixed(decimals);
