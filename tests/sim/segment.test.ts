@@ -1,10 +1,13 @@
-// Sim-only smoke test for the segmentation pass. Hand-builds `Problem`s and
-// asserts node/segment counts and adjacency invariants — no compliance math.
-// Run with: npx tsx scripts/smoke-segment.ts
+// Anchor tests for sim/segment.ts. Pins node/segment counts, adjacency
+// invariants, and the input-validation error codes — internal graph
+// structure that properties.test.ts doesn't probe (it only sees
+// simulate's public output, not the segmentation graph).
+// Run with: npx tsx tests/sim/segment.test.ts
 
-import type { Beam, Problem } from '../src/sim/problem';
-import type { Vec3 } from '../src/sim/math';
-import { buildSegmentation } from '../src/sim/segment';
+import type { Beam, Problem } from '../../src/sim/problem';
+import type { Vec3 } from '../../src/sim/math';
+import { buildSegmentation } from '../../src/sim/segment';
+import { expect, eqInt, near, finish } from './_assert';
 
 const STEEL = { E_MPa: 200_000, G_MPa: 79_000 };
 const SECT = { Ix_mm4: 833.33, Iy_mm4: 833.33, J_mm4: 1400 };
@@ -16,18 +19,6 @@ function horzBeam(origin_mm: Vec3, length_mm: number): Beam {
     section: SECT,
     material: STEEL,
   };
-}
-
-let failed = false;
-function expect(name: string, cond: boolean): void {
-  if (!cond) failed = true;
-  console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`);
-}
-function eqInt(name: string, actual: number, want: number): void {
-  expect(`${name}: got ${actual}, want ${want}`, actual === want);
-}
-function near(name: string, actual: number, want: number, eps = 1e-9): void {
-  expect(`${name}: got ${actual}, want ${want}`, Math.abs(actual - want) < eps);
 }
 
 // ---- 1: empty problem ----
@@ -144,5 +135,4 @@ function near(name: string, actual: number, want: number, eps = 1e-9): void {
   expect('returns error', 'kind' in r && r.kind === 'error' && r.code === 'beams-disconnected');
 }
 
-console.log(failed ? '\nSEGMENT SMOKE FAILED' : '\nsegment smoke ok');
-process.exitCode = failed ? 1 : 0;
+finish('segment anchors');

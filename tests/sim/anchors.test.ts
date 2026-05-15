@@ -1,13 +1,16 @@
-// Sim-only smoke test. Hand-builds `Problem`s and checks the deflection math
-// against closed-form cantilever formulas — no DSL, no walker, no state. That
-// it runs at all proves sim/ stands alone as a library.
-// Run with: npx tsx scripts/smoke-compliance.ts
+// Closed-form anchor tests for sim/. Hand-built `Problem`s with expected
+// values derived from textbook cantilever formulas — these pin specific
+// coefficients (L³/3EI, M·L²/2EI signs, transverse transport, T-junction
+// LCA paths) that the metamorphic property tests in properties.test.ts
+// can't capture.
+// Run with: npx tsx tests/sim/anchors.test.ts
 
-import type { Beam, Problem } from '../src/sim/problem';
-import type { Vec3 } from '../src/sim/math';
-import { buildCompliances } from '../src/sim/compliance';
-import { simulate } from '../src/sim/simulate';
-import type { Mode } from '../src/sim/compliance';
+import type { Beam, Problem } from '../../src/sim/problem';
+import type { Vec3 } from '../../src/sim/math';
+import { buildCompliances } from '../../src/sim/compliance';
+import { simulate } from '../../src/sim/simulate';
+import type { Mode } from '../../src/sim/compliance';
+import { check, checkNear0, expect, finish } from './_assert';
 
 const STEEL = { E_MPa: 200_000, G_MPa: 79_000 };
 const KGF_TO_N = 9.80665;
@@ -22,26 +25,6 @@ const RECT_10 = (() => {
     J_mm4: a * b ** 3 * (1 / 3 - 0.21 * r * (1 - r ** 4 / 12)),
   };
 })();
-
-let failed = false;
-function check(name: string, actual: number, expected: number, tolRel = 1e-12): void {
-  const rel = Math.abs(actual - expected) / (Math.abs(expected) + 1e-30);
-  const ok = rel < tolRel;
-  if (!ok) failed = true;
-  console.log(
-    `${ok ? 'ok  ' : 'FAIL'} ${name}: got ${actual.toExponential(6)}, ` +
-      `want ${expected.toExponential(6)} (rel ${rel.toExponential(2)})`,
-  );
-}
-function checkNear0(name: string, actual: number, tolAbs = 1e-9): void {
-  const ok = Math.abs(actual) < tolAbs;
-  if (!ok) failed = true;
-  console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: got ${actual.toExponential(6)} (want ~0)`);
-}
-function expect(name: string, cond: boolean): void {
-  if (!cond) failed = true;
-  console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`);
-}
 
 // A 'horz' cantilever beam: axial=+X, ex=-Z, ey=+Y (the walker horz root frame).
 function horzBeam(origin_mm: Vec3, length_mm: number): Beam {
@@ -391,5 +374,4 @@ function singleCantilever(): Problem {
   }
 }
 
-console.log(failed ? '\nSMOKE FAILED' : '\nsmoke ok');
-process.exitCode = failed ? 1 : 0;
+finish('compliance anchors');
