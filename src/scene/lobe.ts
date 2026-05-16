@@ -154,21 +154,23 @@ export class LobeRenderer {
     this.lobeAnims = [];
   }
 
-  apply(scale: number, settled: boolean, lobeCeilWorld: number): void {
+  apply(scale: number, targetScale: number, lobeCeilWorld: number): void {
     if (this.lobeAnims.length === 0) return;
     const floor = this.lobeFloor;
 
     for (const a of this.lobeAnims) {
+      // Target scale decides which variant the lobe is heading toward;
+      // current scale paces the fade. If the target says "no over/under",
+      // force it off the whole transition (otherwise the raw smoothstep
+      // would flash a fractional konpeito/underflow that vanishes at settle).
+      // If the target says "yes", let the smoothstep at the current scale
+      // fade it in.
+      const outerMaxTarget = a.delta_max_mm * targetScale;
+      const overOn  = smoothstep(LOBE_OVER_BLEND_LO * lobeCeilWorld, lobeCeilWorld, outerMaxTarget) >= 0.5;
+      const underOn = (1 - smoothstep(LOBE_UNDER_BLEND_LO * floor, floor, outerMaxTarget)) >= 0.5;
       const outerMax = a.delta_max_mm * scale;
-      let aUnder = 1 - smoothstep(LOBE_UNDER_BLEND_LO * floor, floor, outerMax);
-      let aOver  =     smoothstep(LOBE_OVER_BLEND_LO * lobeCeilWorld, lobeCeilWorld, outerMax);
-      // Once the scale animation settles, snap to a single dominant state
-      // ({under, normal, over}) so the steady image isn't a faint blend.
-      if (settled) {
-        if (aOver >= 0.5)        { aOver = 1; aUnder = 0; }
-        else if (aUnder >= 0.5)  { aUnder = 1; aOver = 0; }
-        else                     { aOver = 0; aUnder = 0; }
-      }
+      const aOver  = overOn  ? smoothstep(LOBE_OVER_BLEND_LO * lobeCeilWorld, lobeCeilWorld, outerMax) : 0;
+      const aUnder = underOn ? 1 - smoothstep(LOBE_UNDER_BLEND_LO * floor, floor, outerMax) : 0;
 
       // Clamp the normal lobe so it never visibly outgrows the konpeito mid-
       // crossfade. δ_max = 0 → aUnder = 1 already hides it; skip the divide.

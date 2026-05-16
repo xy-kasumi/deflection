@@ -279,10 +279,8 @@ export class Scene {
   // lockstep.
   private applyLobesAndSticks() {
     const ceil = computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf);
-    const scale = this.displayScale_anim;
-    const settled = scale === this.displayScale_target;
-    this.lobes.apply(scale, settled, ceil);
-    this.sticks.apply(scale, ceil);
+    this.lobes.apply(this.displayScale_anim, this.displayScale_target, ceil);
+    this.sticks.apply(this.displayScale_anim, ceil);
   }
 
   // Log-space ease so ×10 steps feel like a uniform "zoom rate" rather than an
