@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Vec3 } from '../walker';
-import { COLOR, MOTION, easeToward } from './tokens';
+import { COLOR, MOTION, VU, easeToward } from './tokens';
 
 // One straight segment anchored at a query node, oriented along the unit
 // argmax direction d* of a single (beam, mode) part, half-length δ_{b,m} (mm)
@@ -8,10 +8,17 @@ import { COLOR, MOTION, easeToward } from './tokens';
 // renderer draws ±vector_mm from origin — the segment crosses the node and
 // pokes out the antipode of the lobe. The renderer scales it with the live
 // δ-exag and clamps each tip at lobeCeilWorld so it never shoots off-screen.
+//
+// arm_origin_mm (rotation-mode sticks only): physical lever from the point
+// where the chain leaves the rotating beam — beams[b+1].startFrame.origin —
+// to the query. Drawn as a thin scaffolding line at true mm length (no
+// δ-exag scaling), making the rotation × arm geometry that produced the
+// stick visible.
 export interface Stick {
   origin_mm: Vec3;
   /** d* · δ_{b,m} — half-vector; the segment extends ±this from origin at unit δ-exag. */
   vector_mm: Vec3;
+  arm_origin_mm?: Vec3;
 }
 
 // Renders the contribution sticks: a fade-in/out overlay that lives in a
@@ -26,10 +33,20 @@ export interface Stick {
 // the target, the anim loop eases fade_anim toward it, and the children are
 // disposed only after the fade-out has fully completed (so the sticks don't
 // snap out before the user's eye has tracked them away).
+// Arm opacity, expressed as a fraction of the stick's. The arm has its own
+// hue (COLOR.deformedArm) so it doesn't read as "faded stick"; the slight
+// dimming keeps the visual hierarchy result-over-cause.
+const ARM_OPACITY_FRAC = 0.8;
+
 export class StickRenderer {
   private group = new THREE.Group();
   private mat = new THREE.MeshBasicMaterial({
     color: COLOR.deformed,
+    transparent: true,
+    opacity: 0,
+  });
+  private armMat = new THREE.MeshBasicMaterial({
+    color: COLOR.deformedArm,
     transparent: true,
     opacity: 0,
   });
@@ -65,9 +82,13 @@ export class StickRenderer {
   // Cylinder per Stick, oriented local-Y = d* so apply() can scale only
   // mesh.scale.y without inflating the cross-section. Clamp uses |v| (one-side
   // length); both tips stay inside the konpeito ceiling.
+  // Rotation-mode sticks also get an arm cylinder (arm_origin → origin) at
+  // true mm length — see Stick.arm_origin_mm. Apply skips arms by checking
+  // userData.dist_mm, so they sit at their baked geometry length untouched.
   private rebuildChildren(sticks: Stick[]): void {
     this.disposeChildren();
     const r = this.radius;
+    const armR = r * (VU.stickArmR / VU.stickR);
     const yAxis = new THREE.Vector3(0, 1, 0);
     for (const s of sticks) {
       const v = s.vector_mm;
@@ -83,6 +104,27 @@ export class StickRenderer {
       mesh.position.set(s.origin_mm[0], s.origin_mm[1], s.origin_mm[2]);
       mesh.userData['dist_mm'] = dist;
       this.group.add(mesh);
+
+      if (s.arm_origin_mm) {
+        const ax = s.origin_mm[0] - s.arm_origin_mm[0];
+        const ay = s.origin_mm[1] - s.arm_origin_mm[1];
+        const az = s.origin_mm[2] - s.arm_origin_mm[2];
+        const aLen = Math.hypot(ax, ay, az);
+        if (aLen > 0) {
+          const armGeom = new THREE.CylinderGeometry(armR, armR, aLen, 8);
+          const armMesh = new THREE.Mesh(armGeom, this.armMat);
+          armMesh.quaternion.setFromUnitVectors(
+            yAxis,
+            new THREE.Vector3(ax / aLen, ay / aLen, az / aLen),
+          );
+          armMesh.position.set(
+            (s.origin_mm[0] + s.arm_origin_mm[0]) / 2,
+            (s.origin_mm[1] + s.arm_origin_mm[1]) / 2,
+            (s.origin_mm[2] + s.arm_origin_mm[2]) / 2,
+          );
+          this.group.add(armMesh);
+        }
+      }
     }
   }
 
@@ -116,6 +158,7 @@ export class StickRenderer {
   // world units.
   apply(scale: number, lobeCeilWorld: number): void {
     this.mat.opacity = this.fade_anim;
+    this.armMat.opacity = this.fade_anim * ARM_OPACITY_FRAC;
     for (const child of this.group.children) {
       const dist = child.userData['dist_mm'] as number | undefined;
       if (!dist || dist <= 0) continue;

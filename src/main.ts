@@ -90,12 +90,18 @@ const hoverHandlers: HoverHandlers = {
   },
 };
 
+// Rotation-driven modes: their contribution at a downstream query is
+// rotation × arm, where arm runs from the next beam's start (= where the
+// chain leaves beam b) to the query. The arm gets visualized alongside the
+// stick to make the lever geometry visible.
+const ROTATION_MODES = new Set<Mode>(['bendIxRot', 'bendIyRot', 'twist']);
+
 // Resolve the hovered (beam, mode) keys to one stick per query node in the
 // chain. Each sub-mode is rank-1, so each (query, beam, mode) gives a single
 // direction + magnitude; pessimistic decomposition has no shared loads /
 // shared direction across queries, so we emit them all.
 function computeSticks(): Stick[] | null {
-  if (!hoverKeys || !lastSim) return null;
+  if (!hoverKeys || !lastSim || !last) return null;
   const sticks: Stick[] = [];
   for (const node of lastSim.queryResults) {
     for (const key of hoverKeys) {
@@ -105,9 +111,18 @@ function computeSticks(): Stick[] | null {
       if (!bm) continue;
       const { point, distance } = bm.deflection_mm.furthest();
       if (distance === 0) continue;
+      // Arm is only meaningful for rotation modes and only when the query is
+      // strictly downstream of beam b — same-beam rotation contributions, if
+      // nonzero (interior-split case), don't have a single UI-level arm.
+      const nextBeam = last.beams[key.beamIx + 1];
+      const arm_origin_mm =
+        ROTATION_MODES.has(key.mode) && node.query.beamIx > key.beamIx && nextBeam
+          ? nextBeam.startFrame.origin
+          : undefined;
       sticks.push({
         origin_mm: node.pos_mm,
         vector_mm: point,
+        ...(arm_origin_mm && { arm_origin_mm }),
       });
     }
   }

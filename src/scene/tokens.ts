@@ -5,6 +5,7 @@
 // Emotional register of color:
 //   neutral / structural        → greys      (bg, joint, clamp, beam)
 //   load / physical action      → orange     (attachment, deformed)
+//   geometric helper for action → dark warm grey (deformedArm — moment-arm scaffold)
 //   peak / overflow / off-scale → red        (deformedPeak — *never* "error")
 //   editor focus / current      → green/blue (walkerHintCurrent, beamCurrent)
 export const COLOR = {
@@ -16,6 +17,7 @@ export const COLOR = {
   attachment: 0xd97a1a,
   walkerHintCurrent: 0x2e7d32,
   deformed: 0xd97a1a,
+  deformedArm: 0x615852,
   deformedPeak: 0xc62828,
 } as const;
 
@@ -33,6 +35,7 @@ export const VU = {
   labelOffset: 5,
   lobeFloorR: 0.75,    // underflow dia = 1.5u — just edges past the rod
   stickR: 0.4,         // contribution-stick dia = 0.8u — chunky enough to read past lobe shell and beam
+  stickArmR: 0.075,    // rotation-arm dia = 0.15u — thin scaffolding line
 } as const;
 
 // Easing time-constants in the 1/τ form consumed by `easeToward` below.
