@@ -3,7 +3,7 @@ import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
 import type { ConvexEnvelope } from '../sim/math';
 import { formatMm } from '../breakdown';
-import { COLOR, MOTION, easeToward } from './tokens';
+import { COLOR } from './tokens';
 
 const LOBE_CAP_LO = 0.975;
 const LOBE_SHELL_ALPHA = 0.22;
@@ -23,10 +23,6 @@ const LOBE_CEIL_AREA_FRAC = 0.075;
 const LOBE_UNDER_BLEND_LO = 0.7;
 const LOBE_OVER_BLEND_LO  = 0.85;
 const LOBE_KONPEITO_FRAC  = 0.5;
-
-// Ascending: recommendDisplayScale picks the largest non-overflown by a single
-// forward pass.
-const DISPLAY_SCALES = [1, 10, 100, 1000] as const;
 
 // Radial-falloff alpha mask sampled at gl_PointCoord; turns square GL points
 // into soft round splats.
@@ -90,34 +86,6 @@ export interface LobeBuildResult {
 export class LobeRenderer {
   private lobeAnims: LobeAnim[] = [];
   private lobeFloor = 0;
-  private displayScale_target = 1;
-  private displayScale_anim = 1;
-
-  getTarget(): number {
-    return this.displayScale_target;
-  }
-
-  // Shared with StickRenderer so sticks scale in lockstep with the lobe.
-  getDisplayScale(): number {
-    return this.displayScale_anim;
-  }
-
-  setTarget(s: number): boolean {
-    if (s === this.displayScale_target) return false;
-    this.displayScale_target = s;
-    return true;
-  }
-
-  // Largest scale that keeps the lobe at or below the overflow ceiling.
-  // Degenerate (δ_max ≤ 0) gets the maximum so the choice is unambiguous.
-  recommendDisplayScale(delta_max_mm: number, lobeCeilWorld: number): number {
-    if (delta_max_mm <= 0) return DISPLAY_SCALES[DISPLAY_SCALES.length - 1]!;
-    let best: number = DISPLAY_SCALES[0]!;
-    for (const s of DISPLAY_SCALES) {
-      if (delta_max_mm * s <= lobeCeilWorld) best = s;
-    }
-    return best;
-  }
 
   buildFor(sim: SimResult, beams: BeamNode[], opts: LobeBuildOpts): LobeBuildResult {
     this.lobeAnims = [];
@@ -186,33 +154,16 @@ export class LobeRenderer {
     this.lobeAnims = [];
   }
 
-  // Log-space ease so ×10 steps feel like a uniform "zoom rate" rather than an
-  // exponential blast.
-  tickScale(dt: number): boolean {
-    const logT = Math.log(this.displayScale_target);
-    const logC = Math.log(this.displayScale_anim);
-    if (Math.abs(logT - logC) > MOTION.scaleSettleLog) {
-      this.displayScale_anim = Math.exp(easeToward(logC, logT, dt, MOTION.scaleK));
-      return false;
-    }
-    if (this.displayScale_anim !== this.displayScale_target) {
-      this.displayScale_anim = this.displayScale_target;
-    }
-    return true;
-  }
-
-  apply(lobeCeilWorld: number): void {
-    const scale = this.displayScale_anim;
+  apply(scale: number, settled: boolean, lobeCeilWorld: number): void {
     if (this.lobeAnims.length === 0) return;
     const floor = this.lobeFloor;
-    // Snap to the dominant state once the scale has settled, so the steady
-    // image is one of {under, normal, over} — not a faint blend of two.
-    const settled = scale === this.displayScale_target;
 
     for (const a of this.lobeAnims) {
       const outerMax = a.delta_max_mm * scale;
       let aUnder = 1 - smoothstep(LOBE_UNDER_BLEND_LO * floor, floor, outerMax);
       let aOver  =     smoothstep(LOBE_OVER_BLEND_LO * lobeCeilWorld, lobeCeilWorld, outerMax);
+      // Once the scale animation settles, snap to a single dominant state
+      // ({under, normal, over}) so the steady image isn't a faint blend.
       if (settled) {
         if (aOver >= 0.5)        { aOver = 1; aUnder = 0; }
         else if (aUnder >= 0.5)  { aUnder = 1; aOver = 0; }

@@ -14,6 +14,10 @@ const ISO_PITCH_DEG = -30;
 const CLICK_MOVE_THRESH_SQ = 16;
 const YAW_PER_PX = 1 / 150;
 
+// Ascending: recommendDisplayScale picks the largest non-overflown by a single
+// forward pass. The HTML scale-button ladder mirrors this list.
+export const DISPLAY_SCALES = [1, 10, 100, 1000] as const;
+
 const deg = (d: number) => (d * Math.PI) / 180;
 
 export class Scene {
@@ -31,6 +35,8 @@ export class Scene {
   private animHandle = 0;
   private center: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
   private scaleHalf = 100;
+  private displayScale_target = 1;
+  private displayScale_anim = 1;
 
   private onPick: (nodeIx: number) => void;
   private pickables: THREE.Mesh[] = [];
@@ -140,7 +146,9 @@ export class Scene {
   }
 
   setDisplayScale(target: number): void {
-    if (this.lobes.setTarget(target)) this.startAnim();
+    if (target === this.displayScale_target) return;
+    this.displayScale_target = target;
+    this.startAnim();
   }
 
   // Show / hide contribution sticks. Pessimistic decomposition has independent
@@ -162,9 +170,16 @@ export class Scene {
     else this.refresh();
   }
 
+  // Largest scale that keeps the lobe at or below the overflow ceiling.
+  // Degenerate (δ_max ≤ 0) gets the maximum so the choice is unambiguous.
   recommendDisplayScale(delta_max_mm: number): number {
     const ceil = computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf);
-    return this.lobes.recommendDisplayScale(delta_max_mm, ceil);
+    if (delta_max_mm <= 0) return DISPLAY_SCALES[DISPLAY_SCALES.length - 1]!;
+    let best: number = DISPLAY_SCALES[0]!;
+    for (const s of DISPLAY_SCALES) {
+      if (delta_max_mm * s <= ceil) best = s;
+    }
+    return best;
   }
 
   private tryPick(clientX: number, clientY: number): void {
@@ -239,7 +254,7 @@ export class Scene {
         if (Math.abs(this.yawVelocity) < MOTION.dragStopVel) this.yawVelocity = 0;
       }
 
-      const scaleSettled = this.lobes.tickScale(dt);
+      const scaleSettled = this.tickScale(dt);
       const stickSettled = this.sticks.tickFade(dt);
       this.applyLobesAndSticks();
 
@@ -260,12 +275,29 @@ export class Scene {
   }
 
   // Lobes and sticks share the canvas-derived ceiling and the animated δ-exag,
-  // and always need to be applied together (sticks read scale via the lobe's
-  // getDisplayScale()). Wrapping keeps every call site in lockstep.
+  // and always need to be applied together. Wrapping keeps every call site in
+  // lockstep.
   private applyLobesAndSticks() {
     const ceil = computeLobeCeilWorld(this.renderer.domElement, this.scaleHalf);
-    this.lobes.apply(ceil);
-    this.sticks.apply(this.lobes.getDisplayScale(), ceil);
+    const scale = this.displayScale_anim;
+    const settled = scale === this.displayScale_target;
+    this.lobes.apply(scale, settled, ceil);
+    this.sticks.apply(scale, ceil);
+  }
+
+  // Log-space ease so ×10 steps feel like a uniform "zoom rate" rather than an
+  // exponential blast.
+  private tickScale(dt: number): boolean {
+    const logT = Math.log(this.displayScale_target);
+    const logC = Math.log(this.displayScale_anim);
+    if (Math.abs(logT - logC) > MOTION.scaleSettleLog) {
+      this.displayScale_anim = Math.exp(easeToward(logC, logT, dt, MOTION.scaleK));
+      return false;
+    }
+    if (this.displayScale_anim !== this.displayScale_target) {
+      this.displayScale_anim = this.displayScale_target;
+    }
+    return true;
   }
 
   private refresh() {
