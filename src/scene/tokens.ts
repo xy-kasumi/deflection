@@ -58,11 +58,3 @@ export function easeToward(current: number, target: number, dt: number, k: numbe
   return current + (target - current) * (1 - Math.exp(-dt * k));
 }
 
-// Convert a 0xRRGGBB color token to GLSL `vec3(r, g, b)` literal text.
-// Lets the lobe shader paint from COLOR instead of duplicating hex values.
-export function hexToVec3(hex: number): string {
-  const r = ((hex >> 16) & 0xff) / 255;
-  const g = ((hex >> 8) & 0xff) / 255;
-  const b = (hex & 0xff) / 255;
-  return `vec3(${r.toFixed(4)}, ${g.toFixed(4)}, ${b.toFixed(4)})`;
-}

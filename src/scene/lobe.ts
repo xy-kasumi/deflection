@@ -1,44 +1,44 @@
 import * as THREE from 'three';
 import type { BeamNode, Vec3 } from '../walker';
 import type { SimResult } from '../sim/simulate';
-import { boundaryFromTerms, capEllipsoidsForUniform, type ConvexEnvelope } from '../sim/math';
+import type { ConvexEnvelope } from '../sim/math';
 import { formatMm } from '../breakdown';
-import { COLOR, MOTION, easeToward, hexToVec3 } from './tokens';
+import { COLOR, MOTION, easeToward } from './tokens';
 
-// Normal-lobe rendering. Filled mesh with per-vertex t = δ/δ_max. The fragment
-// shader paints a faint orange shell below t = CAP_LO and an opaque red cap
-// above — the cap is a "point" on a sharp peak, a "band" on a ridge, the whole
-// surface on a true sphere. fwidth-AA keeps the cap edge pixel-clean
-// regardless of mesh density or lobe orientation.
+// Normal-lobe rendering. Sample N directions d on S² via Fibonacci spiral,
+// compute boundary points bdy(d) = Σ Mᵢ · normalize(Mᵢᵀd) CPU-side, and
+// render the surface as a THREE.Points cloud colored by t = |bdy|/δ_max.
+// Shell points (low t) get faint orange; cap points (t≈1) get opaque red.
+//
+// Why points, not a mesh: the boundary map can be highly non-uniform — for an
+// oblate spheroid the equator stretches tangentially while shrinking radially,
+// producing needle-shaped triangles near the max-ring that slice through one
+// another in 3D and cause transparency blend-order artifacts. Worse, for
+// rank-deficient envelopes (a pancake from a single in-plane load) the map
+// outright collapses S² onto a curve and no triangulation parameterized by d
+// can recover. Uniform d ∈ S² renders dense where the lobe is fat (rims, peaks)
+// and sparse where it is thin — the cap-as-ring on a pancake, cap-as-tips on
+// a needle, cap-as-point on a peak all emerge for free from the sample density.
 const LOBE_CAP_LO = 0.975;
 const LOBE_SHELL_ALPHA = 0.22;
-// Icosphere subdivision. (detail+1)² sub-triangles per base face → 20·(detail+1)²
-// triangles total. detail=20 → ~3.5° vertex spacing, smooth cap boundary.
-const LOBE_DETAIL = 20;
 
-// Sum-of-ellipsoids cap for the shader. WebGL minimums easily accommodate this
-// many mat3 uniforms; bumping if a future scene needs more is a one-line edit.
-const MAX_LOADS = 16;
-
-// Per-vertex CPU spot-check: K randomly chosen vertices carry the CPU-computed
-// boundary vector; the shader writes 1.0 into vDiscrep when its own boundary
-// differs by more than SPOTCHECK_TOL_REL · dMax in vector L2. Fragment shader
-// paints those vertices solid magenta — bright halos = shader/CPU disagree,
-// see [[boundaryFromTerms]] in math.ts.
-//
-// Vector comparison (not magnitude alone) catches direction errors too: a
-// shader that computed the right radius along the wrong axis would otherwise
-// pass a scalar check.
-//
-// K random (not strided) so the icosphere's 20-fold symmetry can't accidentally
-// align with sample placement. Density target: ~14° mean spacing on S² — dense
-// enough that a wrong-shape region of ~half a steradian lights multiple halos.
-const K_SPOTCHECK = 384;
-const SPOTCHECK_TOL_REL = 0.01;
+// Total samples per lobe. One bdy evaluation per sample per sim update; cost
+// is N · n_loads · ~30 flops — negligible at sim-update cadence.
+const LOBE_POINT_COUNT = 10000;
+// Fixed on-screen point size in pixels. sizeAttenuation:false keeps points
+// at the same pixel size regardless of camera zoom or mesh.scale, so density
+// stays predictable across the displayScale animation and viewport changes.
+// (PointsMaterial.size is NOT multiplied by mesh.scale when sizeAttenuation
+// is true, so the world-units path requires per-frame size updates to track
+// the lobe — fixed pixels is the simpler contract.)
+const LOBE_POINT_SIZE_PX = 3;
+// Cap points sized larger so the cap region reads as a solid colored band
+// against the sparser shell, even where samples land far apart.
+const LOBE_CAP_POINT_BOOST = 1.3;
 
 // Sphere-fallback threshold — δ_min/δ_max above this and the lobe is nearly
-// isotropic. The shader, told via uniform, skips cap-painting and renders a
-// uniform shell. Computed CPU-side from a coarse S² sweep of `support()`.
+// isotropic. All points get the shell color in that case (no cap painting),
+// matching the "uniform shell" affordance used for the underflow sphere.
 const LOBE_ISOTROPIC_RATIO = LOBE_CAP_LO;
 
 // Overflow trigger: the konpeito (lobe-too-big) state begins when the lobe
@@ -60,124 +60,54 @@ const LOBE_KONPEITO_FRAC  = 0.5;
 // non-overflown by iterating once.
 const DISPLAY_SCALES = [1, 10, 100, 1000] as const;
 
-// Vertex shader — GLSL TWIN of `boundaryFromTerms(d_unit, ellipsoidMats)` in
-// src/sim/math.ts. Must stay in sync; cpuBoundary carries CPU truth at
-// K_SPOTCHECK random vertices and the fragment shader halo-paints any
-// per-vertex divergence.
-//
-// Mesh is positioned at the node's world origin with identity rotation, so
-// `position` (mesh-local) equals the unit direction d on S². The shader
-// replaces position with boundary(d) = Σ Mᵢ · normalize(Mᵢᵀd) — the surface
-// point of K with outward normal d. The resulting vertex traces ∂K, not the
-// radial graph of the support function.
-//
-// `d * Ms[i]` in GLSL is row-vec × mat = (Msᵀ · d)ᵀ; the GLSL `Ms[i] *` then
-// gives M · (Mᵀd / |Mᵀd|), matching the CPU formula.
-//
-// vT = |boundary(d)| / dMax in [0, 1]; the fragment shader caps where vT is
-// close to 1 — i.e. at the actual furthest points on ∂K.
-const LOBE_VS = `
-precision highp float;
-uniform mat3 Ms[${MAX_LOADS}];
-uniform int nLoads;
-uniform float dMaxInv;
-attribute vec3 cpuBoundary;
-attribute float cpuCheck;
-varying float vT;
-varying float vDiscrep;
-void main() {
-  vec3 d = normalize(position);
-  vec3 bdy = vec3(0.0);
-  for (int i = 0; i < ${MAX_LOADS}; i++) {
-    if (i >= nLoads) break;
-    vec3 v = d * Ms[i];
-    float mag = length(v);
-    if (mag > 1e-30) {
-      bdy += Ms[i] * (v / mag);
-    }
-  }
-  vT = length(bdy) * dMaxInv;
-  vDiscrep = 0.0;
-  if (cpuCheck > 0.5) {
-    float relErr = length(bdy - cpuBoundary) * dMaxInv;
-    if (relErr > ${SPOTCHECK_TOL_REL}) vDiscrep = 1.0;
-  }
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(bdy, 1.0);
-}
-`;
-
-const LOBE_FS = `
-precision highp float;
-uniform float alphaMul;
-uniform float isIsotropic;
-varying float vT;
-varying float vDiscrep;
-void main() {
-  if (vDiscrep > 0.5) {
-    // CPU/GPU δ disagree at a spot-check vertex — emit a magenta halo (the
-    // varying interpolates over the surrounding triangle).
-    gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
-    return;
-  }
-  float t = clamp(vT, 0.0, 1.0);
-  float wT = fwidth(t);
-  float capAlpha = smoothstep(${LOBE_CAP_LO} - wT, ${LOBE_CAP_LO} + wT, t);
-  capAlpha *= (1.0 - isIsotropic);
-  vec3 shellCol = ${hexToVec3(COLOR.deformed)};
-  vec3 capCol   = ${hexToVec3(COLOR.deformedPeak)};
-  vec3 col = mix(shellCol, capCol, capAlpha);
-  float a = mix(${LOBE_SHELL_ALPHA}, 1.0, capAlpha) * alphaMul;
-  gl_FragColor = vec4(col, a);
-}
-`;
-
-// Unit icosphere built once. Positions are exactly unit-length so the vertex
-// shader's `normalize(position)` is structurally redundant — kept defensive
-// against future floating-point drift. The BufferAttribute is shared across
-// every node's per-lobe BufferGeometry: position never changes, so the GL
-// buffer is uploaded once per page load.
-const SHARED_POS_ATTR: THREE.BufferAttribute = (() => {
-  const g = new THREE.IcosahedronGeometry(1, LOBE_DETAIL);
-  const pos = g.attributes.position as THREE.BufferAttribute;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    const len = Math.hypot(x, y, z) || 1;
-    pos.setXYZ(i, x / len, y / len, z / len);
-  }
-  return pos;
+// Shared radial-falloff alpha mask for all lobe Points materials. Sampled by
+// gl_PointCoord in Three.js's built-in points fragment shader, it turns each
+// square GL point into a soft round splat — the texture's rgb is solid white
+// (multiplied by the material's color) and its alpha falls smoothly from 1 at
+// the center to 0 at the rim. Without it, points render as hard squares.
+const SOFT_POINT_TEX: THREE.CanvasTexture = (() => {
+  const size = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d')!;
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.5, 'rgba(255,255,255,0.6)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(c);
 })();
 
-// K random vertex slots flagged as CPU spot-check samples. LCG-based so the
-// pattern is deterministic across loads but bears no relation to the
-// icosphere's 20-fold symmetry (a strided sampler could).
-const SPOTCHECK_INDICES: number[] = (() => {
-  const n = SHARED_POS_ATTR.count;
-  const out: number[] = [];
-  const seen = new Set<number>();
-  let s = 1 >>> 0;
-  while (out.length < K_SPOTCHECK && out.length < n) {
-    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-    const idx = s % n;
-    if (!seen.has(idx)) {
-      seen.add(idx);
-      out.push(idx);
-    }
+// Fibonacci spiral on S². Deterministic, near-uniform, no clustering or
+// singularities — well-suited to direction sampling for a support-function
+// surface. Returns N unit Vec3s.
+function fibonacciS2(n: number): Vec3[] {
+  const out: Vec3[] = [];
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const z = 1 - (2 * (i + 0.5)) / n;
+    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    const phi = golden * i;
+    out.push([r * Math.cos(phi), r * Math.sin(phi), z]);
   }
   return out;
-})();
+}
 
 // Per-query anim context. Built once per sim update; the per-frame tick
-// reads delta_max_mm and the base opacities, then drives mesh.scale and
-// material/uniform alpha to crossfade between the three states.
+// reads delta_max_mm and the base opacities, then drives scale and material
+// opacity to crossfade between the three states.
 interface LobeAnim {
   delta_max_mm: number;
-  // Opacity each mesh fades toward when it owns the visual; matches the
-  // pre-animation per-state values (normal lobes are denser via shader
-  // paint, so they sit at a lower base than the solid under/over hints).
+  // Opacity each object fades toward when it owns the visual; matches the
+  // pre-animation per-state values (normal-lobe shell points are denser via
+  // SHELL_ALPHA so they sit at a lower base than the solid under/over hints).
   normalBase: number;
   underBase: number;
   overBase: number;
-  normal: THREE.Mesh;
+  // Group containing two THREE.Points (shell + cap). Object3D-typed so we
+  // can scale/fade uniformly without caring about the internals.
+  normal: THREE.Object3D;
   under: THREE.Mesh;
   over: THREE.Mesh;
 }
@@ -208,11 +138,6 @@ export class LobeRenderer {
   private lobeFloor = 0;
   private displayScale_target = 1;
   private displayScale_anim = 1;
-  // Per-node ShaderMaterial pool. Reusing across rebuilds (just swap uniform
-  // values) avoids the ~7ms first-draw cost Three.js pays for each fresh
-  // ShaderMaterial instance — uniform-location lookup, attribute binding, and
-  // program acquisition for the user-defined shader.
-  private normalMatPool: THREE.ShaderMaterial[] = [];
 
   getTarget(): number {
     return this.displayScale_target;
@@ -269,9 +194,7 @@ export class LobeRenderer {
       // them according to the animated δ-exag; categorical state-switching is
       // replaced by a continuous crossfade. Base opacities preserve the prior
       // per-state look at each crossfade endpoint.
-      const reuseMat = this.normalMatPool[ix];
-      const normal = buildNormalLobe(lobeDir, reuseMat);
-      if (!reuseMat) this.normalMatPool[ix] = normal.material as THREE.ShaderMaterial;
+      const normal = buildNormalPoints(lobeDir);
       normal.position.copy(worldPos);
       meshes.push(normal);
 
@@ -378,9 +301,9 @@ export class LobeRenderer {
       const underOpacity  = a.underBase  * aUnder;
       const overOpacity   = a.overBase   * aOver;
 
-      setLobeOpacity(a.normal, true, normalOpacity);
-      setLobeOpacity(a.under, false, underOpacity);
-      setLobeOpacity(a.over, false, overOpacity);
+      setLobeOpacity(a.normal, normalOpacity);
+      setLobeOpacity(a.under, underOpacity);
+      setLobeOpacity(a.over, overOpacity);
     }
   }
 }
@@ -399,113 +322,84 @@ export function computeLobeCeilWorld(canvas: HTMLCanvasElement, scaleHalf: numbe
   return lobeCeilPx * worldPerPx;
 }
 
-// Filled icosphere deformed radially by δ(d) in the vertex shader. The
-// fragment shader paints a faint orange shell below t = LOBE_CAP_LO and an
-// opaque red cap above — cap topology emerges from the data (point on a sharp
-// peak, band on a ridge), and fwidth-AA keeps its edge pixel-clean.
+// Fibonacci-sampled point cloud of ∂K. Returned as a Group containing two
+// THREE.Points: shell (low t) and cap (t ≥ LOBE_CAP_LO). Two materials lets
+// us keep stock PointsMaterial — base opacities differ (shell faint, cap
+// solid), and the apply()-driven crossfade multiplies them uniformly through
+// userData.baseOpacity.
 //
-// Geometry: shares SHARED_POS_ATTR (one upload per page) plus a per-lobe
-// cpuDelta attribute carrying CPU truth at K_SPOTCHECK random vertices. Any
-// shader-CPU disagreement halo-paints those vertices magenta — see the LOBE_VS
-// header for the contract with supportFromTerms() in math.ts.
-//
-// Built at unit δ-exag: the shader's radial deformation equals δ in mm. The
-// caller drives mesh.scale to apply the animated δ-exag.
+// Built at native δ-exag: point positions equal bdy(d) in mm. The caller
+// drives the wrapping Group's scale to apply the animated δ-exag.
 //
 // Isotropic case: when δ_min/δ_max > LOBE_ISOTROPIC_RATIO across a coarse
-// directional sample, the fragment shader's isIsotropic uniform suppresses
-// cap painting and the lobe renders as a uniform shell — same affordance as
-// the underflow sphere, just at the lobe's natural size.
-function buildNormalLobe(dir: ConvexEnvelope, reuseMat?: THREE.ShaderMaterial): THREE.Mesh {
-  const ellipsoidMats = capEllipsoidsForUniform(dir.ellipsoidMats, MAX_LOADS);
-  const nLoads = Math.min(ellipsoidMats.length, MAX_LOADS);
+// directional sweep, no cap is emitted — the whole cloud is shell, the same
+// affordance as the underflow sphere just at the lobe's natural size.
+function buildNormalPoints(dir: ConvexEnvelope): THREE.Object3D {
   const dMax = dir.furthest().distance;
-  const dMaxInv = dMax > 0 ? 1 / dMax : 0;
+  const samples = fibonacciS2(LOBE_POINT_COUNT);
 
-  // Coarse Fibonacci-spiral sample of the support function on S² to detect
-  // near-isotropy. Off the type's API by design — generic S² sampling has
-  // nothing to do with the envelope's internals.
+  // Coarse sub-sweep of the support function to decide isotropy. Skips the
+  // bdy work (just |Mᵀd| sums per direction).
   let dMin = dMax;
-  const N_ISOTROPY = 24;
-  const golden = Math.PI * (3 - Math.sqrt(5));
-  for (let i = 0; i < N_ISOTROPY; i++) {
-    const z = 1 - (2 * (i + 0.5)) / N_ISOTROPY;
-    const r = Math.sqrt(Math.max(0, 1 - z * z));
-    const phi = golden * i;
-    const v = dir.support([r * Math.cos(phi), r * Math.sin(phi), z]);
+  const N_ISO = 24;
+  const stride = Math.max(1, Math.floor(LOBE_POINT_COUNT / N_ISO));
+  for (let i = 0; i < LOBE_POINT_COUNT; i += stride) {
+    const v = dir.support(samples[i]!);
     if (v < dMin) dMin = v;
   }
   const isIsotropic = dMax > 0 && dMin / dMax > LOBE_ISOTROPIC_RATIO;
 
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute('position', SHARED_POS_ATTR);
-  const cpuBoundary = new Float32Array(SHARED_POS_ATTR.count * 3);
-  const cpuCheck = new Float32Array(SHARED_POS_ATTR.count);
-  for (const idx of SPOTCHECK_INDICES) {
-    const d: Vec3 = [
-      SHARED_POS_ATTR.getX(idx),
-      SHARED_POS_ATTR.getY(idx),
-      SHARED_POS_ATTR.getZ(idx),
-    ];
-    const b = boundaryFromTerms(d, ellipsoidMats);
-    cpuBoundary[idx * 3 + 0] = b[0];
-    cpuBoundary[idx * 3 + 1] = b[1];
-    cpuBoundary[idx * 3 + 2] = b[2];
-    cpuCheck[idx] = 1;
+  // Classify each sample into shell or cap by t = |bdy|/dMax. Build positions
+  // in mm space; the wrapping Group's scale handles displayScale.
+  const shellPos: number[] = [];
+  const capPos: number[] = [];
+  const dMaxInv = dMax > 0 ? 1 / dMax : 0;
+  for (const d of samples) {
+    const b = dir.boundary(d);
+    const t = Math.hypot(b[0], b[1], b[2]) * dMaxInv;
+    const target = !isIsotropic && t >= LOBE_CAP_LO ? capPos : shellPos;
+    target.push(b[0], b[1], b[2]);
   }
-  geom.setAttribute('cpuBoundary', new THREE.BufferAttribute(cpuBoundary, 3));
-  geom.setAttribute('cpuCheck', new THREE.BufferAttribute(cpuCheck, 1));
-  // Surface vertices lie on ∂K; |boundary(d)| ≤ dMax for any d. Use dMax for
-  // frustum culling so the (shader-deformed) extent stays correct.
-  geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), dMax || 1);
 
-  // Pack M matrices into the uniform array. THREE.Matrix3.set takes row-major
-  // args, matching how Mat3 is laid out in math.ts. The shader's
-  // `Ms[i] * normalize(d * Ms[i])` mirrors boundaryFromTerms. Unused slots
-  // are zeroed so a stale shader iteration (if any) sees no contribution.
-  let mat: THREE.ShaderMaterial;
-  if (reuseMat) {
-    mat = reuseMat;
-    const MsArr = mat.uniforms['Ms']!.value as THREE.Matrix3[];
-    for (let i = 0; i < MAX_LOADS; i++) {
-      if (i < nLoads) {
-        const M = ellipsoidMats[i]!;
-        MsArr[i]!.set(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7], M[8]);
-      } else {
-        MsArr[i]!.set(0, 0, 0, 0, 0, 0, 0, 0, 0);
-      }
-    }
-    mat.uniforms['nLoads']!.value = nLoads;
-    mat.uniforms['dMaxInv']!.value = dMaxInv;
-    mat.uniforms['isIsotropic']!.value = isIsotropic ? 1 : 0;
-  } else {
-    const MsUniform: THREE.Matrix3[] = [];
-    for (let i = 0; i < MAX_LOADS; i++) {
-      const m = new THREE.Matrix3();
-      if (i < nLoads) {
-        const M = ellipsoidMats[i]!;
-        m.set(M[0], M[1], M[2], M[3], M[4], M[5], M[6], M[7], M[8]);
-      } else {
-        m.set(0, 0, 0, 0, 0, 0, 0, 0, 0);
-      }
-      MsUniform.push(m);
-    }
-    mat = new THREE.ShaderMaterial({
-      uniforms: {
-        Ms: { value: MsUniform },
-        nLoads: { value: nLoads },
-        dMaxInv: { value: dMaxInv },
-        alphaMul: { value: 1 },
-        isIsotropic: { value: isIsotropic ? 1 : 0 },
-      },
-      vertexShader: LOBE_VS,
-      fragmentShader: LOBE_FS,
+  const group = new THREE.Group();
+
+  if (shellPos.length > 0) {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(shellPos, 3));
+    geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), dMax || 1);
+    const mat = new THREE.PointsMaterial({
+      color: COLOR.deformed,
+      size: LOBE_POINT_SIZE_PX,
+      sizeAttenuation: false,
+      map: SOFT_POINT_TEX,
+      alphaTest: 0.02,
       transparent: true,
-      side: THREE.DoubleSide,
+      opacity: LOBE_SHELL_ALPHA,
       depthWrite: false,
     });
+    mat.userData['baseOpacity'] = LOBE_SHELL_ALPHA;
+    group.add(new THREE.Points(geom, mat));
   }
-  return new THREE.Mesh(geom, mat);
+
+  if (capPos.length > 0) {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(capPos, 3));
+    geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), dMax || 1);
+    const mat = new THREE.PointsMaterial({
+      color: COLOR.deformedPeak,
+      size: LOBE_POINT_SIZE_PX * LOBE_CAP_POINT_BOOST,
+      sizeAttenuation: false,
+      map: SOFT_POINT_TEX,
+      alphaTest: 0.02,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+    });
+    mat.userData['baseOpacity'] = 1;
+    group.add(new THREE.Points(geom, mat));
+  }
+
+  return group;
 }
 
 // Solid orange sphere at the floor radius — "deflection here is too tight to
@@ -556,13 +450,16 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   return t * t * (3 - 2 * t);
 }
 
-// Lobe meshes carry two flavors of material; route opacity to the right
-// field and hide nearly-invisible meshes so the renderer can skip them.
-function setLobeOpacity(mesh: THREE.Mesh, isShader: boolean, opacity: number): void {
-  if (isShader) {
-    (mesh.material as THREE.ShaderMaterial).uniforms['alphaMul']!.value = opacity;
-  } else {
-    (mesh.material as THREE.MeshBasicMaterial).opacity = opacity;
-  }
-  mesh.visible = opacity > 1e-3;
+// Walk an object's materials and multiply each one's baseOpacity (1 if unset)
+// by the requested fade. Hides nearly-invisible objects so the renderer can
+// skip them entirely.
+function setLobeOpacity(obj: THREE.Object3D, opacity: number): void {
+  obj.traverse((child) => {
+    const m = (child as THREE.Mesh | THREE.Points).material;
+    if (m && !Array.isArray(m) && 'opacity' in m) {
+      const base = (m.userData['baseOpacity'] ?? 1) as number;
+      m.opacity = base * opacity;
+    }
+  });
+  obj.visible = opacity > 1e-3;
 }
