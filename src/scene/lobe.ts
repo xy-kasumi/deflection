@@ -6,12 +6,17 @@ import { formatMm } from '../breakdown';
 import { COLOR } from './tokens';
 
 const LOBE_CAP_LO = 0.975;
-const LOBE_SHELL_ALPHA = 0.22;
+
+const LOBE_INTERIOR_ALPHA = 0.05;
+const LOBE_SHELL_ALPHA = 0.3;
+const LOBE_CAP_ALPHA = 0.5;
+
 const LOBE_POINT_COUNT = 10000;
 // PointsMaterial.size is NOT scaled by mesh.scale; sizeAttenuation:false
 // keeps point density stable across the displayScale animation.
 const LOBE_POINT_SIZE_PX = 3;
-const LOBE_CAP_POINT_BOOST = 1.3;
+const LOBE_POINT_SIZE_MIN_PX = 2;
+const LOBE_CAP_POINT_BOOST = 1.5;
 
 // δ_min/δ_max above this → render as uniform shell (no cap painting), matching
 // the underflow-sphere affordance for "no meaningful direction here."
@@ -187,6 +192,14 @@ export class LobeRenderer {
       setLobeOpacity(a.normal, normalOpacity);
       setLobeOpacity(a.under, underOpacity);
       setLobeOpacity(a.over, overOpacity);
+
+      // Equalize visual density across lobes of different displayed sizes:
+      // covered-pixels / lobe-area is constant when point_size scales with
+      // lobe screen radius. Clamped (ceiling-sized) lobe → factor = 1.
+      const sizeFactor = lobeCeilWorld > 0
+        ? (a.delta_max_mm * normalScale) / lobeCeilWorld
+        : 1;
+      setLobePointSize(a.normal, sizeFactor);
     }
   }
 }
@@ -203,8 +216,8 @@ export function computeLobeCeilWorld(canvas: HTMLCanvasElement, scaleHalf: numbe
   return lobeCeilPx * worldPerPx;
 }
 
-// Two THREE.Points (shell + cap) in a Group. Positions in mm; the Group's
-// scale carries displayScale.
+// Three THREE.Points (interior + shell + cap) in a Group. Positions in mm;
+// the Group's scale carries displayScale.
 function buildNormalPoints(dir: ConvexEnvelope): THREE.Object3D {
   const dMax = dir.furthest().distance;
   const samples = fibonacciS2(LOBE_POINT_COUNT);
@@ -218,17 +231,47 @@ function buildNormalPoints(dir: ConvexEnvelope): THREE.Object3D {
   }
   const isIsotropic = dMax > 0 && dMin / dMax > LOBE_ISOTROPIC_RATIO;
 
+  // Each S² direction emits two points: a boundary point at bdy(d), and an
+  // interior chord sample at r·bdy(d) with r = u^(1/3) (volume-uniform for
+  // rank-3 K; rank-deficient K still fills its affine hull, biased outward).
+  // Boundary points near δ_max peel off as `capPos` for the peak-highlight
+  // pass; interior lives in its own buffer with its own (dimmer) base alpha.
   const shellPos: number[] = [];
   const capPos: number[] = [];
+  const interiorPos: number[] = [];
   const dMaxInv = dMax > 0 ? 1 / dMax : 0;
   for (const d of samples) {
     const b = dir.boundary(d);
     const t = Math.hypot(b[0], b[1], b[2]) * dMaxInv;
     const target = !isIsotropic && t >= LOBE_CAP_LO ? capPos : shellPos;
     target.push(b[0], b[1], b[2]);
+    const r = Math.cbrt(Math.random());
+    interiorPos.push(b[0] * r, b[1] * r, b[2] * r);
   }
 
   const group = new THREE.Group();
+
+  if (interiorPos.length > 0) {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(interiorPos, 3));
+    geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), dMax || 1);
+    const mat = new THREE.PointsMaterial({
+      color: COLOR.deformed,
+      size: LOBE_POINT_SIZE_PX,
+      sizeAttenuation: false,
+      map: SOFT_POINT_TEX,
+      // Interior base alpha is already dim; the per-lobe fade for non-
+      // selected nodes drops it further. alphaTest must stay below the
+      // dimmest effective alpha, or every interior pixel gets culled.
+      alphaTest: 0,
+      transparent: true,
+      opacity: LOBE_INTERIOR_ALPHA,
+      depthWrite: false,
+    });
+    mat.userData['baseOpacity'] = LOBE_INTERIOR_ALPHA;
+    mat.userData['baseSize'] = LOBE_POINT_SIZE_PX;
+    group.add(new THREE.Points(geom, mat));
+  }
 
   if (shellPos.length > 0) {
     const geom = new THREE.BufferGeometry();
@@ -245,6 +288,7 @@ function buildNormalPoints(dir: ConvexEnvelope): THREE.Object3D {
       depthWrite: false,
     });
     mat.userData['baseOpacity'] = LOBE_SHELL_ALPHA;
+    mat.userData['baseSize'] = LOBE_POINT_SIZE_PX;
     group.add(new THREE.Points(geom, mat));
   }
 
@@ -259,10 +303,11 @@ function buildNormalPoints(dir: ConvexEnvelope): THREE.Object3D {
       map: SOFT_POINT_TEX,
       alphaTest: 0.02,
       transparent: true,
-      opacity: 1,
+      opacity: LOBE_CAP_ALPHA,
       depthWrite: false,
     });
-    mat.userData['baseOpacity'] = 1;
+    mat.userData['baseOpacity'] = LOBE_CAP_ALPHA;
+    mat.userData['baseSize'] = LOBE_POINT_SIZE_PX * LOBE_CAP_POINT_BOOST;
     group.add(new THREE.Points(geom, mat));
   }
 
@@ -318,4 +363,17 @@ function setLobeOpacity(obj: THREE.Object3D, fade: number): void {
     }
   });
   obj.visible = fade > 1e-3;
+}
+
+// Multiplies each PointsMaterial's userData.baseSize by `factor`, floored
+// at LOBE_POINT_SIZE_MIN_PX so sub-pixel points don't vanish on the
+// smallest lobes.
+function setLobePointSize(obj: THREE.Object3D, factor: number): void {
+  obj.traverse((child) => {
+    const m = (child as THREE.Points).material;
+    if (m && !Array.isArray(m) && 'size' in m && m.userData['baseSize'] != null) {
+      const base = m.userData['baseSize'] as number;
+      m.size = Math.max(LOBE_POINT_SIZE_MIN_PX, base * factor);
+    }
+  });
 }
