@@ -11,11 +11,11 @@ const LOBE_INTERIOR_ALPHA = 0.05;
 const LOBE_SHELL_ALPHA = 0.3;
 const LOBE_CAP_ALPHA = 0.5;
 
-const LOBE_POINT_COUNT = 10000;
+const LOBE_POINT_COUNT = 4000;
 // PointsMaterial.size is NOT scaled by mesh.scale; sizeAttenuation:false
 // keeps point density stable across the displayScale animation.
-const LOBE_POINT_SIZE_PX = 3;
-const LOBE_POINT_SIZE_MIN_PX = 2;
+const LOBE_POINT_SIZE_PX = 5;
+const LOBE_POINT_SIZE_MIN_PX = 3;
 const LOBE_CAP_POINT_BOOST = 1.5;
 
 // δ_min/δ_max above this → render as uniform shell (no cap painting), matching
@@ -45,7 +45,13 @@ const SOFT_POINT_TEX: THREE.CanvasTexture = (() => {
   return new THREE.CanvasTexture(c);
 })();
 
+// Cached by sample count. fibonacciS2 is deterministic, so every lobe build
+// reuses the same array. Treat the result as read-only (no defensive copy).
+const FIB_CACHE = new Map<number, Vec3[]>();
+
 function fibonacciS2(n: number): Vec3[] {
+  const cached = FIB_CACHE.get(n);
+  if (cached) return cached;
   const out: Vec3[] = [];
   const golden = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < n; i++) {
@@ -54,6 +60,7 @@ function fibonacciS2(n: number): Vec3[] {
     const phi = golden * i;
     out.push([r * Math.cos(phi), r * Math.sin(phi), z]);
   }
+  FIB_CACHE.set(n, out);
   return out;
 }
 
@@ -236,22 +243,48 @@ function buildNormalPoints(dir: ConvexEnvelope): THREE.Object3D {
   // rank-3 K; rank-deficient K still fills its affine hull, biased outward).
   // Boundary points near δ_max peel off as `capPos` for the peak-highlight
   // pass; interior lives in its own buffer with its own (dimmer) base alpha.
-  const shellPos: number[] = [];
-  const capPos: number[] = [];
-  const interiorPos: number[] = [];
+  // Buckets are preallocated to the worst case so the inner loop is a tight
+  // indexed write; trailing slack is trimmed at handoff.
+  const cap3 = LOBE_POINT_COUNT * 3;
+  const shellPos = new Array<number>(cap3);
+  const capPos = new Array<number>(cap3);
+  const interiorPos = new Array<number>(cap3);
+  let shellCount = 0, capCount = 0, interiorCount = 0;
   const dMaxInv = dMax > 0 ? 1 / dMax : 0;
-  for (const d of samples) {
+  for (let k = 0; k < samples.length; k++) {
+    const d = samples[k]!;
     const b = dir.boundary(d);
-    const t = Math.hypot(b[0], b[1], b[2]) * dMaxInv;
-    const target = !isIsotropic && t >= LOBE_CAP_LO ? capPos : shellPos;
-    target.push(b[0], b[1], b[2]);
+    const bx = b[0], by = b[1], bz = b[2];
+    const t = Math.hypot(bx, by, bz) * dMaxInv;
+    if (!isIsotropic && t >= LOBE_CAP_LO) {
+      capPos[capCount++] = bx; capPos[capCount++] = by; capPos[capCount++] = bz;
+    } else {
+      shellPos[shellCount++] = bx; shellPos[shellCount++] = by; shellPos[shellCount++] = bz;
+    }
     const r = Math.cbrt(Math.random());
-    interiorPos.push(b[0] * r, b[1] * r, b[2] * r);
+    interiorPos[interiorCount++] = bx * r;
+    interiorPos[interiorCount++] = by * r;
+    interiorPos[interiorCount++] = bz * r;
   }
 
+  return buildPointsGroup(
+    interiorPos, interiorCount,
+    shellPos, shellCount,
+    capPos, capCount,
+    dMax,
+  );
+}
+
+function buildPointsGroup(
+  interiorPos: number[], interiorCount: number,
+  shellPos: number[], shellCount: number,
+  capPos: number[], capCount: number,
+  dMax: number,
+): THREE.Object3D {
   const group = new THREE.Group();
 
-  if (interiorPos.length > 0) {
+  if (interiorCount > 0) {
+    interiorPos.length = interiorCount;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(interiorPos, 3));
     geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), dMax || 1);
@@ -273,7 +306,8 @@ function buildNormalPoints(dir: ConvexEnvelope): THREE.Object3D {
     group.add(new THREE.Points(geom, mat));
   }
 
-  if (shellPos.length > 0) {
+  if (shellCount > 0) {
+    shellPos.length = shellCount;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(shellPos, 3));
     geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), dMax || 1);
@@ -292,7 +326,8 @@ function buildNormalPoints(dir: ConvexEnvelope): THREE.Object3D {
     group.add(new THREE.Points(geom, mat));
   }
 
-  if (capPos.length > 0) {
+  if (capCount > 0) {
+    capPos.length = capCount;
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(capPos, 3));
     geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), dMax || 1);

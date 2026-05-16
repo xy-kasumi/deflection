@@ -55,11 +55,19 @@ export interface ConvexEnvelope {
 
 /** Build a ConvexEnvelope from a list of ellipsoid shape matrices. */
 export function makeConvexEnvelope(ellipsoidMats: Mat3[]): ConvexEnvelope {
+  const n = ellipsoidMats.length;
+  // Closure-local scratch: support and boundary never call each other within
+  // a single envelope, so reusing these buffers across calls is safe.
+  const _v: Vec3 = [0, 0, 0];
+  const _u: Vec3 = [0, 0, 0];
+  const _w: Vec3 = [0, 0, 0];
+
   function support(x: Vec3): number {
     let s = 0;
-    for (const M of ellipsoidMats) {
-      const v = matVecT(M, x);
-      s += Math.hypot(v[0], v[1], v[2]);
+    for (let i = 0; i < n; i++) {
+      const M = ellipsoidMats[i]!;
+      matVecTInto(M, x, _v);
+      s += Math.hypot(_v[0], _v[1], _v[2]);
     }
     return s;
   }
@@ -70,19 +78,18 @@ export function makeConvexEnvelope(ellipsoidMats: Mat3[]): ConvexEnvelope {
   // the entire Eᵢ; contributing 0 picks the center, which is the natural
   // representative of the multi-valued argmax set.
   function boundary(normal: Vec3): Vec3 {
-    const out: Vec3 = [0, 0, 0];
-    for (const M of ellipsoidMats) {
-      const v = matVecT(M, normal);
-      const mag = Math.hypot(v[0], v[1], v[2]);
+    let ox = 0, oy = 0, oz = 0;
+    for (let i = 0; i < n; i++) {
+      const M = ellipsoidMats[i]!;
+      matVecTInto(M, normal, _v);
+      const mag = Math.hypot(_v[0], _v[1], _v[2]);
       if (mag < 1e-30) continue;
       const inv = 1 / mag;
-      const u: Vec3 = [v[0] * inv, v[1] * inv, v[2] * inv];
-      const w = matVec(M, u);
-      out[0] += w[0];
-      out[1] += w[1];
-      out[2] += w[2];
+      _u[0] = _v[0] * inv; _u[1] = _v[1] * inv; _u[2] = _v[2] * inv;
+      matVecInto(M, _u, _w);
+      ox += _w[0]; oy += _w[1]; oz += _w[2];
     }
-    return out;
+    return [ox, oy, oz];
   }
 
   function furthest(): { point: Vec3; distance: number } {
@@ -122,23 +129,28 @@ export function makeConvexEnvelope(ellipsoidMats: Mat3[]): ConvexEnvelope {
   return { support, boundary, furthest };
 }
 
+/**
+ * Compute M · v into `out`. Returns `out` for chaining.
+ * `out === v` is safe; v's components are captured before write.
+ */
+export function matVecInto(M: Mat3, v: Vec3, out: Vec3): Vec3 {
+  const v0 = v[0], v1 = v[1], v2 = v[2];
+  out[0] = M[0] * v0 + M[1] * v1 + M[2] * v2;
+  out[1] = M[3] * v0 + M[4] * v1 + M[5] * v2;
+  out[2] = M[6] * v0 + M[7] * v1 + M[8] * v2;
+  return out;
+}
+
+/** Compute Mᵀ · v into `out`. `out === v` is safe. */
+export function matVecTInto(M: Mat3, v: Vec3, out: Vec3): Vec3 {
+  const v0 = v[0], v1 = v[1], v2 = v[2];
+  out[0] = M[0] * v0 + M[3] * v1 + M[6] * v2;
+  out[1] = M[1] * v0 + M[4] * v1 + M[7] * v2;
+  out[2] = M[2] * v0 + M[5] * v1 + M[8] * v2;
+  return out;
+}
+
 // ---------- private helpers ----------
-
-function matVec(M: Mat3, v: Vec3): Vec3 {
-  return [
-    M[0] * v[0] + M[1] * v[1] + M[2] * v[2],
-    M[3] * v[0] + M[4] * v[1] + M[5] * v[2],
-    M[6] * v[0] + M[7] * v[1] + M[8] * v[2],
-  ];
-}
-
-function matVecT(M: Mat3, v: Vec3): Vec3 {
-  return [
-    M[0] * v[0] + M[3] * v[1] + M[6] * v[2],
-    M[1] * v[0] + M[4] * v[1] + M[7] * v[2],
-    M[2] * v[0] + M[5] * v[1] + M[8] * v[2],
-  ];
-}
 
 function normalize(v: Vec3): Vec3 {
   const m = Math.hypot(v[0], v[1], v[2]);
