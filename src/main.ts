@@ -10,7 +10,7 @@ import type { Mode } from './sim/compliance';
 import type { Stick } from './scene/stick';
 
 const INITIAL_SRC = `support(single)
-mass_accel(2G)
+mass_accel(0G)
 horz beam(steel rect(W10 H10) L300)
 mid: right beam(aluminum rect(W10 H10) L150)
 down beam(plastic rect(W10 H10) L100) end:load(1kgf)
