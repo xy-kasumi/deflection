@@ -61,9 +61,14 @@ export function rotateProblem(p: Problem, R: Mat3): Problem {
   };
 }
 
-/** Multiply every load's Fmax_N by α. */
+/** Multiply every force/torque magnitude by α. */
 export function scaleLoads(p: Problem, alpha: number): Problem {
-  return { ...p, loads: p.loads.map((l) => ({ ...l, Fmax_N: l.Fmax_N * alpha })) };
+  return {
+    ...p,
+    loads: p.loads.map((l) => l.kind === 'torque'
+      ? { ...l, Tmax_Nmm: l.Tmax_Nmm * alpha }
+      : { ...l, Fmax_N: l.Fmax_N * alpha }),
+  };
 }
 
 /** Multiply every beam's E and G by α. */
@@ -118,7 +123,7 @@ export function splitBeam(p: Problem, beamIx: number, s: number): Problem {
   return {
     ...p,
     beams,
-    loads: p.loads.map((l) => ({ ...remap(l.beamIx, l.offset_mm), Fmax_N: l.Fmax_N })),
+    loads: p.loads.map((l) => ({ ...l, ...remap(l.beamIx, l.offset_mm) })),
     queries: p.queries.map((q) => remap(q.beamIx, q.offset_mm)),
   };
 }

@@ -52,14 +52,14 @@ export interface BeamDeflection {
 
 /**
  * Translation-deflection envelope for query q. Each per-load compliance Cₚ
- * is scaled by F_max,p to form an ellipsoid shape matrix; the envelope is
- * their Minkowski sum.
+ * is composed with that load's admissible generalized-action matrix to form
+ * an ellipsoid shape matrix; the envelope is their Minkowski sum.
  */
 function deflectionEnvelopeFor(c: Compliances, queryIx: number): ConvexEnvelope {
   const ts: Mat3[] = [];
   for (const t of c.totals) {
     if (t.queryIx !== queryIx) continue;
-    ts.push(scaleMat(t.C, c.loadFmax_N[t.loadIx] ?? 0));
+    ts.push(matMul(t.C, c.loadActionMatrices[t.loadIx]!));
   }
   return makeConvexEnvelope(ts);
 }
@@ -69,7 +69,7 @@ function rotationEnvelopeFor(c: Compliances, queryIx: number): ConvexEnvelope {
   const ts: Mat3[] = [];
   for (const t of c.rotationTotals) {
     if (t.queryIx !== queryIx) continue;
-    ts.push(scaleMat(t.C, c.loadFmax_N[t.loadIx] ?? 0));
+    ts.push(matMul(t.C, c.loadActionMatrices[t.loadIx]!));
   }
   return makeConvexEnvelope(ts);
 }
@@ -98,7 +98,7 @@ function beamEnvelopes(c: Compliances, queryIx: number): BeamDeflection[] {
       byMode: [...perMode.entries()].map(([mode, m]) => {
         const sorted = [...m.entries()].sort(([a], [z]) => a - z);
         const ts = sorted.map(([loadIx, C]) =>
-          scaleMat(C, c.loadFmax_N[loadIx] ?? 0),
+          matMul(C, c.loadActionMatrices[loadIx]!),
         );
         return {
           mode,
@@ -119,12 +119,17 @@ function accumMat(m: Map<number, Mat3>, loadIx: number, C: Mat3): void {
   for (let i = 0; i < 9; i++) (cur[i] as number) += C[i] as number;
 }
 
-function scaleMat(M: Mat3, s: number): Mat3 {
-  return [
-    M[0] * s, M[1] * s, M[2] * s,
-    M[3] * s, M[4] * s, M[5] * s,
-    M[6] * s, M[7] * s, M[8] * s,
-  ];
+function matMul(A: Mat3, B: Mat3): Mat3 {
+  const C: Mat3 = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      C[r * 3 + c] =
+        A[r * 3]! * B[c]! +
+        A[r * 3 + 1]! * B[3 + c]! +
+        A[r * 3 + 2]! * B[6 + c]!;
+    }
+  }
+  return C;
 }
 
 /**

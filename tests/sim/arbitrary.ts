@@ -7,7 +7,7 @@
 // floating-point inputs that drown relative-tolerance checks.
 
 import fc from 'fast-check';
-import type { Beam, DeflectionQuery, Frame, Load, Material, Problem, Section } from '../../src/sim/problem';
+import type { Beam, DeflectionQuery, ForceAxes, Frame, Load, Material, Problem, Section } from '../../src/sim/problem';
 import type { Vec3 } from '../../src/sim/math';
 import { vAdd, vCross, vScale, vUnit, rotMat, mApply } from './invariants';
 
@@ -66,6 +66,9 @@ const arbLength = fc.double({ min: 30, max: 250, noNaN: true });
 
 // log-uniform Fmax in [0.1, 1000] N
 const arbFmax = fc.double({ min: Math.log(0.1), max: Math.log(1000), noNaN: true }).map(Math.exp);
+const arbActionKind = fc.constantFrom<ForceAxes | 'torque'>(
+  'x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz', 'torque',
+);
 
 // ---------- Problem arbitrary ----------
 
@@ -111,8 +114,16 @@ export function arbProblem(opts: ProblemArbOpts = {}): fc.Arbitrary<Problem> {
         : fc.constant(support),
       fc.integer(nLoadsRange),
       fc.integer(nQueriesRange),
-      // Per load: (beam-fraction-index, offset-fraction, log-Fmax) → resolved below
-      fc.array(fc.tuple(fc.double({ min: 0, max: 1, noNaN: true }), fc.double({ min: 0, max: 1, noNaN: true }), arbFmax), { minLength: nLoadsRange.max, maxLength: nLoadsRange.max }),
+      // Per action: (beam selector, offset, magnitude, force axes/torque).
+      fc.array(
+        fc.tuple(
+          fc.double({ min: 0, max: 1, noNaN: true }),
+          fc.double({ min: 0, max: 1, noNaN: true }),
+          arbFmax,
+          arbActionKind,
+        ),
+        { minLength: nLoadsRange.max, maxLength: nLoadsRange.max },
+      ),
       fc.array(fc.tuple(fc.double({ min: 0, max: 1, noNaN: true }), fc.double({ min: 0, max: 1, noNaN: true })), { minLength: nQueriesRange.max, maxLength: nQueriesRange.max }),
     ).map(([beamParams, attachFracs, supportKind, nL, nQ, loadParams, queryParams]) => {
       const beams: Beam[] = [];
@@ -135,9 +146,12 @@ export function arbProblem(opts: ProblemArbOpts = {}): fc.Arbitrary<Problem> {
       const pickBeam = (frac: number) => Math.min(beams.length - 1, Math.floor(frac * beams.length));
       const loads: Load[] = [];
       for (let i = 0; i < nL; i++) {
-        const [bFrac, oFrac, fmax] = loadParams[i]!;
+        const [bFrac, oFrac, magnitude, actionKind] = loadParams[i]!;
         const bIx = pickBeam(bFrac);
-        loads.push({ beamIx: bIx, offset_mm: oFrac * beams[bIx]!.length_mm, Fmax_N: fmax });
+        const at = { beamIx: bIx, offset_mm: oFrac * beams[bIx]!.length_mm };
+        loads.push(actionKind === 'torque'
+          ? { kind: 'torque', ...at, Tmax_Nmm: magnitude }
+          : { kind: 'force', ...at, Fmax_N: magnitude, axes: actionKind });
       }
       const queries: DeflectionQuery[] = [];
       for (let i = 0; i < nQ; i++) {

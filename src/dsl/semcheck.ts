@@ -5,7 +5,10 @@ const KNOWN_ENVS = new Set(['support', 'mass_accel']);
 const ACCEL_UNITS = new Set(['G', 'm/s2']);
 const KNOWN_MATERIALS = new Set(['plastic', 'aluminum', 'steel']);
 const KNOWN_SHAPES = new Set(['rect', 'round', 'section']);
-const KNOWN_ATTACHMENTS = new Set(['load']);
+const KNOWN_ATTACHMENTS = new Set(['load', 'torque']);
+const FORCE_AXES = new Set(['x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz']);
+const FORCE_UNITS = new Set(['N', 'kgf', 'gf']);
+const TORQUE_UNITS = new Set(['Nmm', 'Ncm', 'Nm']);
 
 /**
  * All semantic issues are warnings — the structure still walks/renders, just
@@ -231,41 +234,73 @@ function checkAttachment(a: Attachment, diags: Diagnostic[]) {
     return;
   }
   if (a.name === 'load') {
-    if (a.params.length !== 1) {
+    if (a.params.length < 1 || a.params.length > 2) {
       diags.push({
         severity: 'warning',
-        message: 'load(...) takes exactly one magnitude',
+        message: 'load(...) takes a magnitude and optional axes',
         span: a.span,
       });
       return;
     }
-    const p = a.params[0] as Param;
-    if (p.kind !== 'quantity') {
-      diags.push({
-        severity: 'warning',
-        message: 'load(...) magnitude must be a number',
-        span: p.span,
-      });
-      return;
-    }
-    if (p.quantity.prefix) {
-      diags.push({
-        severity: 'warning',
-        message: `unexpected prefix '${p.quantity.prefix}' on load magnitude`,
-        span: p.span,
-      });
-    }
+    checkMagnitude(a.params[0]!, 'load', FORCE_UNITS, 'kgf, gf, or N', diags);
+    const axes = a.params[1];
     if (
-      p.quantity.unit &&
-      p.quantity.unit !== 'kgf' &&
-      p.quantity.unit !== 'gf' &&
-      p.quantity.unit !== 'N'
+      axes &&
+      (axes.kind !== 'ident' || axes.params !== undefined || !FORCE_AXES.has(axes.name))
     ) {
       diags.push({
         severity: 'warning',
-        message: `unknown unit '${p.quantity.unit}' on load (expected kgf, gf, or N)`,
-        span: p.span,
+        message: 'load axes must be one of x, y, z, xy, xz, yz, or xyz',
+        span: axes.span,
       });
     }
+  } else if (a.name === 'torque') {
+    if (a.params.length !== 1) {
+      diags.push({
+        severity: 'warning',
+        message: 'torque(...) takes exactly one magnitude',
+        span: a.span,
+      });
+      return;
+    }
+    checkMagnitude(a.params[0]!, 'torque', TORQUE_UNITS, 'Nmm, Ncm, or Nm', diags);
+  }
+}
+
+function checkMagnitude(
+  p: Param,
+  action: 'load' | 'torque',
+  units: Set<string>,
+  expectedUnits: string,
+  diags: Diagnostic[],
+): void {
+  if (p.kind !== 'quantity') {
+    diags.push({
+      severity: 'warning',
+      message: `${action}(...) magnitude must be a number`,
+      span: p.span,
+    });
+    return;
+  }
+  if (p.quantity.prefix) {
+    diags.push({
+      severity: 'warning',
+      message: `unexpected prefix '${p.quantity.prefix}' on ${action} magnitude`,
+      span: p.span,
+    });
+  }
+  if (p.quantity.unit && !units.has(p.quantity.unit)) {
+    diags.push({
+      severity: 'warning',
+      message: `unknown unit '${p.quantity.unit}' on ${action} (expected ${expectedUnits})`,
+      span: p.span,
+    });
+  }
+  if (!Number.isFinite(p.quantity.value) || p.quantity.value < 0) {
+    diags.push({
+      severity: 'warning',
+      message: `${action} magnitude must be non-negative`,
+      span: p.span,
+    });
   }
 }

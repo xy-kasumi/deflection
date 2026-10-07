@@ -117,8 +117,8 @@ prop('P1 rotation equivariance', RUNS, () =>
   ),
 );
 
-// P2. Force scaling: Fmax × α  ⇒ envelope.support(d) × α.
-prop('P2 force scaling', RUNS, () =>
+// P2. Action scaling: force/torque magnitude × α ⇒ envelope.support(d) × α.
+prop('P2 action scaling', RUNS, () =>
   fc.property(
     arbProblem({ nLoads: { min: 1, max: 3 } }),
     fc.double({ min: 0.01, max: 100, noNaN: true }),
@@ -197,7 +197,7 @@ prop('P5 load permutation invariance', RUNS, () =>
   ),
 );
 
-// P6. Zero-load no-op: adding a load with Fmax_N = 0 changes nothing.
+// P6. Zero-load no-op: adding a zero-magnitude force changes nothing.
 prop('P6 zero-load no-op', RUNS, () =>
   fc.property(
     arbProblem(),
@@ -206,7 +206,13 @@ prop('P6 zero-load no-op', RUNS, () =>
       const bIx = Math.min(problem.beams.length - 1, Math.floor(bFrac * problem.beams.length));
       const padded: Problem = {
         ...problem,
-        loads: [...problem.loads, { beamIx: bIx, offset_mm: oFrac * problem.beams[bIx]!.length_mm, Fmax_N: 0 }],
+        loads: [...problem.loads, {
+          kind: 'force',
+          beamIx: bIx,
+          offset_mm: oFrac * problem.beams[bIx]!.length_mm,
+          Fmax_N: 0,
+          axes: 'xyz',
+        }],
       };
       const a = mustOk(simulate(problem), 'orig');
       const b = mustOk(simulate(padded), 'padded');

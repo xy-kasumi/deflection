@@ -51,7 +51,6 @@ export interface SegmentedLoad {
   nodeIx: number;
   /** Back-pointer to Problem.loads — preserves caller ordering on output. */
   loadIx: number;
-  Fmax_N: number;
 }
 
 export interface SegmentedQuery {
@@ -182,7 +181,6 @@ export function buildSegmentation(problem: Problem): Segmentation | SimError {
       segLoads.push({
         nodeIx: lookupOffsetNode(offsetToNode, clampToRange(ld.offset_mm, 0, L)),
         loadIx: ix,
-        Fmax_N: ld.Fmax_N,
       });
     }
     for (let ix = 0; ix < problem.queries.length; ix++) {

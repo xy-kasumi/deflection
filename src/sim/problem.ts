@@ -42,15 +42,27 @@ export interface Beam {
   material: Material;
 }
 
-/**
- * A load fully resolved to a world-force magnitude.
- * Represents a worst force within the sphere (|F| <= Fmax).
- */
-export interface Load {
+/** Beam-local force axes. x=frame.ex, y=frame.ey, z=frame.axial. */
+export type ForceAxes = 'x' | 'y' | 'z' | 'xy' | 'xz' | 'yz' | 'xyz';
+
+/** A force whose possible vectors fill a ball in the selected local subspace. */
+export interface ForceLoad {
+  kind: 'force';
   beamIx: number;
   offset_mm: number;
   Fmax_N: number;
+  axes: ForceAxes;
 }
+
+/** A scalar torque about the carrying beam's local z (axial) direction. */
+export interface TorqueLoad {
+  kind: 'torque';
+  beamIx: number;
+  offset_mm: number;
+  Tmax_Nmm: number;
+}
+
+export type Load = ForceLoad | TorqueLoad;
 
 /** A point at which to evaluate the deflection distribution δ(d). */
 export interface DeflectionQuery {

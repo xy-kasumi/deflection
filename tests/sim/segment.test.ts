@@ -54,7 +54,7 @@ function horzBeam(origin_mm: Vec3, length_mm: number): Beam {
   console.log('\n-- 1 beam + 1 load + 1 query --');
   const r = buildSegmentation({
     beams: [horzBeam([0, 0, 0], 100)],
-    loads: [{ beamIx: 0, offset_mm: 50, Fmax_N: 1 }],
+    loads: [{ kind: 'force', beamIx: 0, offset_mm: 50, Fmax_N: 1, axes: 'xyz' }],
     queries: [{ beamIx: 0, offset_mm: 100 }],
     support: 'single',
   });
@@ -101,7 +101,7 @@ function horzBeam(origin_mm: Vec3, length_mm: number): Beam {
   };
   const r = buildSegmentation({
     beams: [horzBeam([0, 0, 0], 300), beam1],
-    loads: [{ beamIx: 1, offset_mm: 100, Fmax_N: 1 }],
+    loads: [{ kind: 'force', beamIx: 1, offset_mm: 100, Fmax_N: 1, axes: 'xyz' }],
     queries: [{ beamIx: 1, offset_mm: 0 }],
     support: 'single',
   });

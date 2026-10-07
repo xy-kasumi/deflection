@@ -11,6 +11,7 @@ import type {
   Beam,
   DeflectionQuery,
   Frame,
+  ForceAxes,
   Load,
   Material,
   Problem,
@@ -64,11 +65,23 @@ export function buildLoadSystem(structure: Structure, beams: BeamNode[]): LoadSy
 
   for (let i = 0; i < beams.length; i++) {
     for (const att of beams[i]!.attachmentOffsets) {
-      if (att.def.name !== 'load') continue;
-      const F = loadMagnitudeN(att.def);
-      if (F <= 0) continue;
-      loads.push({ beamIx: i, offset_mm: att.local_mm, Fmax_N: F });
-      loadProvenance.push({ source: 'user', sourceSpan: att.def.span, mass_kg: null });
+      if (att.def.name === 'load') {
+        const F = loadMagnitudeN(att.def);
+        if (F <= 0) continue;
+        loads.push({
+          kind: 'force',
+          beamIx: i,
+          offset_mm: att.local_mm,
+          Fmax_N: F,
+          axes: loadAxes(att.def),
+        });
+        loadProvenance.push({ source: 'user', sourceSpan: att.def.span, mass_kg: null });
+      } else if (att.def.name === 'torque') {
+        const T = torqueMagnitudeNmm(att.def);
+        if (T <= 0) continue;
+        loads.push({ kind: 'torque', beamIx: i, offset_mm: att.local_mm, Tmax_Nmm: T });
+        loadProvenance.push({ source: 'user', sourceSpan: att.def.span, mass_kg: null });
+      }
     }
   }
 
@@ -91,7 +104,13 @@ export function buildLoadSystem(structure: Structure, beams: BeamNode[]): LoadSy
       const mass_kg = mats[i]!.rho_kg_per_mm3 * A * b.length_mm;
       const F_N = mass_kg * accel_m_s2;
       if (F_N <= 0) continue;
-      loads.push({ beamIx: i, offset_mm: b.length_mm / 2, Fmax_N: F_N });
+      loads.push({
+        kind: 'force',
+        beamIx: i,
+        offset_mm: b.length_mm / 2,
+        Fmax_N: F_N,
+        axes: 'xyz',
+      });
       loadProvenance.push({ source: 'mass_accel', sourceSpan: null, mass_kg });
     }
   }
@@ -250,8 +269,10 @@ const G_M_PER_S2 = 9.80665;
 
 // ---------- load magnitude (was sim/compliance.ts) ----------
 
+const FORCE_AXES = new Set<ForceAxes>(['x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz']);
+
 function loadMagnitudeN(att: Attachment): number {
-  if (att.params.length !== 1) return 0;
+  if (att.params.length < 1 || att.params.length > 2) return 0;
   const p = att.params[0]!;
   if (p.kind !== 'quantity') return 0;
   const v = p.quantity.value;
@@ -261,6 +282,27 @@ function loadMagnitudeN(att: Attachment): number {
   if (unit === 'kgf') return v * KGF_TO_N;
   if (unit === 'gf') return v * 1e-3 * KGF_TO_N;
   return v * KGF_TO_N;
+}
+
+function loadAxes(att: Attachment): ForceAxes {
+  const p = att.params[1];
+  if (p?.kind === 'ident' && p.params === undefined && FORCE_AXES.has(p.name as ForceAxes)) {
+    return p.name as ForceAxes;
+  }
+  return 'xyz';
+}
+
+function torqueMagnitudeNmm(att: Attachment): number {
+  if (att.params.length !== 1) return 0;
+  const p = att.params[0]!;
+  if (p.kind !== 'quantity') return 0;
+  const v = p.quantity.value;
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  const unit = p.quantity.unit ?? 'Nmm';
+  if (unit === 'Nmm') return v;
+  if (unit === 'Ncm') return v * 10;
+  if (unit === 'Nm') return v * 1000;
+  return v;
 }
 
 function isKnownMaterial(s: string | undefined): boolean {

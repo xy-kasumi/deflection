@@ -197,14 +197,14 @@ export function renderBreakdown(
     for (const r of loadRows) {
       const load = loads[r.loadIx];
       const loc = loadLocEl(load, loadProvenance[r.loadIx], src);
-      const force = document.createElement('span');
-      force.className = 'force';
-      force.textContent = formatLoad(load?.Fmax_N ?? 0);
+      const action = document.createElement('span');
+      action.className = 'force';
+      action.textContent = formatAction(load);
       const value = valueCell(
         fmtLoadCell(r.delta_mm, rows.deltaMax, format, unit),
         intensityOf(r.delta_mm, loadsMax),
       );
-      grid.append(loc, force, value);
+      grid.append(loc, action, value);
     }
     el.appendChild(grid);
   }
@@ -271,9 +271,8 @@ function fmtBeamCell(value_mm: number, total_mm: number, format: DecompFormat, u
     : formatNum(value_mm, unit);
 }
 
-// Load cells: keep the unit suffix. Loads rows mix kinds (force in N, then a
-// length) and the explicit "mm"/"µm" prevents the value from looking like a
-// dimensionless companion to the N.
+// Load cells: keep the unit suffix. Rows mix an action (N or N·mm) with a
+// length, so explicit "mm"/"µm" keeps the contribution unambiguous.
 function fmtLoadCell(value_mm: number, total_mm: number, format: DecompFormat, unit: LengthUnit): string {
   return format === 'pct'
     ? formatPct(fractionOf(value_mm, total_mm))
@@ -395,8 +394,11 @@ function formatAngle(rad: number): string {
   return `${sig2(deg)}°`;
 }
 
-function formatLoad(N: number): string {
-  return `${N.toFixed(2)} N`;
+function formatAction(load: Load | undefined): string {
+  if (!load) return '0';
+  return load.kind === 'torque'
+    ? `${load.Tmax_Nmm.toFixed(2)} N·mm`
+    : `${load.Fmax_N.toFixed(2)} N`;
 }
 
 function fractionOf(part: number, whole: number): number {

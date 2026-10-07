@@ -5,7 +5,7 @@
 // can't capture.
 // Run with: npx tsx tests/sim/anchors.test.ts
 
-import type { Beam, Problem } from '../../src/sim/problem';
+import type { Beam, ForceAxes, Load, Problem } from '../../src/sim/problem';
 import type { Vec3 } from '../../src/sim/math';
 import { buildCompliances } from '../../src/sim/compliance';
 import { simulate } from '../../src/sim/simulate';
@@ -40,10 +40,19 @@ const L = 100;
 const EIx = STEEL.E_MPa * RECT_10.Ix_mm4;
 const EIy = STEEL.E_MPa * RECT_10.Iy_mm4;
 
+function force(
+  beamIx: number,
+  offset_mm: number,
+  Fmax_N: number,
+  axes: ForceAxes = 'xyz',
+): Load {
+  return { kind: 'force', beamIx, offset_mm, Fmax_N, axes };
+}
+
 function singleCantilever(): Problem {
   return {
     beams: [horzBeam([0, 0, 0], L)],
-    loads: [{ beamIx: 0, offset_mm: L, Fmax_N: KGF_TO_N }],
+    loads: [force(0, L, KGF_TO_N)],
     queries: [{ beamIx: 0, offset_mm: L }],
     support: 'single',
   };
@@ -76,7 +85,7 @@ function singleCantilever(): Problem {
   };
   const problem: Problem = {
     beams: [horzBeam([0, 0, 0], L), beam1],
-    loads: [{ beamIx: 1, offset_mm: L, Fmax_N: KGF_TO_N }],
+    loads: [force(1, L, KGF_TO_N)],
     queries: [{ beamIx: 1, offset_mm: L }],
     support: 'single',
   };
@@ -218,7 +227,7 @@ function singleCantilever(): Problem {
   };
   const problem: Problem = {
     beams: [horzBeam([0, 0, 0], L0), beam1],
-    loads: [{ beamIx: 1, offset_mm: L1, Fmax_N: KGF_TO_N }],
+    loads: [force(1, L1, KGF_TO_N)],
     queries: [{ beamIx: 1, offset_mm: 0 }],
     support: 'single',
   };
@@ -263,7 +272,7 @@ function singleCantilever(): Problem {
   };
   const problem: Problem = {
     beams: [horzBeam([0, 0, 0], L), beam1],
-    loads: [{ beamIx: 1, offset_mm: L, Fmax_N: 1 }],
+    loads: [force(1, L, 1)],
     queries: [{ beamIx: 1, offset_mm: L }],
     support: 'single',
   };
@@ -313,7 +322,7 @@ function singleCantilever(): Problem {
     queryAt: { beamIx: number; offset_mm: number },
   ): Problem => ({
     beams: [horzBeam([0, 0, 0], L0), beam1],
-    loads: [{ ...loadAt, Fmax_N: 1 }],
+    loads: [force(loadAt.beamIx, loadAt.offset_mm, 1)],
     queries: [queryAt],
     support: 'single',
   });
@@ -371,6 +380,56 @@ function singleCantilever(): Problem {
       const expY = 5e6 / 6 / EIx;
       check('C: branch→trunk, C[uy←F_y]', C[4]!, expY, 1e-9);
     }
+  }
+}
+
+// ---- Test 10: local force-axis restrictions ----
+{
+  console.log('\n-- Test 10: local force axes --');
+  const run = (axes: ForceAxes) => simulate({
+    beams: [horzBeam([0, 0, 0], L)],
+    loads: [force(0, L, KGF_TO_N, axes)],
+    queries: [{ beamIx: 0, offset_mm: L }],
+    support: 'single',
+  });
+  const expBend = KGF_TO_N * L ** 3 / (3 * EIx);
+
+  const xy = run('xy');
+  if (xy.kind !== 'ok') expect('xy simulate ok', false);
+  else {
+    const env = xy.queryResults[0]!.deflection_mm;
+    check('local xy includes local y/world +Y', env.support([0, 1, 0]), expBend);
+    check('local xy includes local x/world -Z', env.support([0, 0, 1]), expBend);
+    checkNear0('local xy excludes axial/world X', env.support([1, 0, 0]));
+  }
+
+  const z = run('z');
+  if (z.kind !== 'ok') expect('z simulate ok', false);
+  else checkNear0('local z force is axially rigid on a straight beam', z.queryResults[0]!.deflection_mm.furthest().distance);
+}
+
+// ---- Test 11: local-z torque drives torsion and downstream transport ----
+{
+  console.log('\n-- Test 11: local-z torque --');
+  const T = 1000; // N·mm
+  const beam1: Beam = {
+    frame: { origin_mm: [L, 0, 0], ex: [0, 0, -1], ey: [-1, 0, 0], axial: [0, 1, 0] },
+    length_mm: L,
+    section: RECT_10,
+    material: STEEL,
+  };
+  const out = simulate({
+    beams: [horzBeam([0, 0, 0], L), beam1],
+    loads: [{ kind: 'torque', beamIx: 0, offset_mm: L, Tmax_Nmm: T }],
+    queries: [{ beamIx: 1, offset_mm: L }],
+    support: 'single',
+  });
+  if (out.kind !== 'ok') expect('torque simulate ok', false);
+  else {
+    const q = out.queryResults[0]!;
+    const theta = T * L / (STEEL.G_MPa * RECT_10.J_mm4);
+    check('torque rotation = T·L/(GJ)', q.rotation_rad.furthest().distance, theta);
+    check('twist transports tip by θ·arm', q.deflection_mm.furthest().distance, theta * L);
   }
 }
 

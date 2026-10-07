@@ -1,4 +1,4 @@
-import type { Frame, Problem } from './problem';
+import type { Frame, Load, Problem } from './problem';
 import type { Vec3, Mat3 } from './math';
 import type { SimError } from './simulate';
 import { buildSegmentation, type Segment } from './segment';
@@ -40,15 +40,20 @@ interface ComplianceEntry {
 }
 
 export interface Compliances {
-  /** F_max for each real load, in caller order. */
-  loadFmax_N: number[];
+  /**
+   * Maps a unit 3-ball to each real load's admissible world-frame generalized
+   * action. Force entries carry N; torque entries carry N·mm. Local-axis
+   * restrictions appear as zero columns, so disks and lines are represented
+   * without special cases downstream.
+   */
+  loadActionMatrices: Mat3[];
   /** sparse: only nonzero (q, p, b, m) */
   entries: ComplianceEntry[];
   /** Precomputed C_tot[q][p] for fast δ(d) evaluation. */
   totals: { queryIx: number; loadIx: number; C: Mat3 }[];
   /**
    * Rotation compliance C_rot[q][p]: world-frame 3×3 mapping a unit world
-   * force at load p to a linearized world-frame rotation vector at query q.
+   * generalized action at load p to a linearized world-frame rotation vector.
    * Used to build a parallel ConvexEnvelope for δθ_q (rotation worst-case),
    * exposed alongside δ_q. Not decomposed per (b, m) — δθ is reported only
    * as a headline; bend-rotation contributions to *translation* still show
@@ -62,7 +67,7 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
   if ('kind' in seg) return seg;
 
   if (seg.segments.length === 0) {
-    return { loadFmax_N: [], entries: [], totals: [], rotationTotals: [] };
+    return { loadActionMatrices: [], entries: [], totals: [], rotationTotals: [] };
   }
 
   const beamCount = problem.beams.length;
@@ -74,13 +79,14 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
   // moment — for the compatibility solve. They're dropped before public output.
   interface LoadEntry { nodeIx: number; kind: 'force' | 'moment' }
   const loadEntries: LoadEntry[] = [];
-  const loadFmax_N: number[] = [];
+  const loadActionMatrices: Mat3[] = [];
   const segLoadByIx = new Map<number, typeof seg.loads[number]>();
   for (const sl of seg.loads) segLoadByIx.set(sl.loadIx, sl);
   for (let ix = 0; ix < problem.loads.length; ix++) {
     const sl = segLoadByIx.get(ix)!;
-    loadEntries.push({ nodeIx: sl.nodeIx, kind: 'force' });
-    loadFmax_N.push(sl.Fmax_N);
+    const load = problem.loads[ix]!;
+    loadEntries.push({ nodeIx: sl.nodeIx, kind: load.kind === 'torque' ? 'moment' : 'force' });
+    loadActionMatrices.push(loadActionMatrix(load, problem.beams[load.beamIx]!.frame));
   }
   const realLoadCount = problem.loads.length;
 
@@ -90,10 +96,8 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
   if (fixedFixed) {
     clampForceLoadIx = loadEntries.length;
     loadEntries.push({ nodeIx: clampNodeIx, kind: 'force' });
-    loadFmax_N.push(0);
     clampMomentLoadIx = loadEntries.length;
     loadEntries.push({ nodeIx: clampNodeIx, kind: 'moment' });
-    loadFmax_N.push(0);
   }
 
   const queryNodeIxs: number[] = new Array(problem.queries.length);
@@ -284,7 +288,6 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
       };
     }
     // Drop synthetic clamp loads from public API.
-    loadFmax_N.length = realLoadCount;
     for (let q = 0; q < queryNodeIxs.length; q++) {
       rotMap.delete(`${q},${clampForceLoadIx}`);
       rotMap.delete(`${q},${clampMomentLoadIx}`);
@@ -300,7 +303,7 @@ export function buildCompliances(problem: Problem): Compliances | SimError {
     return { queryIx: q, loadIx: p, C };
   });
 
-  return { loadFmax_N, entries, totals, rotationTotals };
+  return { loadActionMatrices, entries, totals, rotationTotals };
 }
 
 function accumEntry(
@@ -345,8 +348,8 @@ function accumEntry(
 //   C_θM = clamp-rotation     ← clamp-moment, clampRot[clamp_moment_load]
 //
 // Solving the 4×4 once per RHS column j gives world reaction matrices
-// R_world[p] (3×3, col j = reaction force for unit world force-j at load p)
-// and M_world[p] (3×3, col j = reaction moment for the same). Effective
+// R_world[p] (3×3, col j = reaction force for unit world generalized-action j
+// at load p) and M_world[p] (3×3, col j = reaction moment for the same). Effective
 // compliance from a real load p to query q decomposes as:
 //
 //   C_eff[q][p]  =  C_tot[q][p]
@@ -639,6 +642,23 @@ function frameToR(f: Frame): Mat3 {
     f.ex[0], f.ey[0], f.axial[0],
     f.ex[1], f.ey[1], f.axial[1],
     f.ex[2], f.ey[2], f.axial[2],
+  ];
+}
+
+function loadActionMatrix(load: Load, frame: Frame): Mat3 {
+  const R = frameToR(frame);
+  if (load.kind === 'torque') {
+    const t = load.Tmax_Nmm;
+    return [0, 0, R[2] * t, 0, 0, R[5] * t, 0, 0, R[8] * t];
+  }
+
+  const x = load.axes.includes('x') ? load.Fmax_N : 0;
+  const y = load.axes.includes('y') ? load.Fmax_N : 0;
+  const z = load.axes.includes('z') ? load.Fmax_N : 0;
+  return [
+    R[0] * x, R[1] * y, R[2] * z,
+    R[3] * x, R[4] * y, R[5] * z,
+    R[6] * x, R[7] * y, R[8] * z,
   ];
 }
 
